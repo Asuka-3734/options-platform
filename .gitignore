@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+dist/
+*.egg-info/
+data/
+experiments/
+runs/
+# Windows 兼容性缓存被某些进程误写入仓库目录（%SystemDrive% 未展开的字面量路径）
+%SystemDrive%/

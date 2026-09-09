@@ -1,0 +1,738 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif; background:#f6f7f9; color:#1f2937; }
+  .wrap { max-width:1100px; margin:0 auto; padding:28px 20px 60px; }
+  h1 { font-size:26px; margin:0 0 4px; }
+  .sub { color:#6b7280; margin-bottom:6px; }
+  .guide { background:#eef2ff; border:1px solid #c7d2fe; border-radius:12px; padding:14px 18px; font-size:14px; margin-top:16px; }
+  .guide h2 { font-size:15px; margin:0 0 6px; }
+  .guide ol { margin:0; padding-left:20px; }
+  .guide li { margin:4px 0; line-height:1.6; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:10px; margin-top:16px; }
+  .card { background:#fff; border:1px solid #e5e7eb; border-radius:10px; padding:12px 14px; }
+  .card .k { font-size:12px; color:#6b7280; }
+  .card .v { font-size:20px; font-weight:600; margin-top:2px; }
+  .card .d { font-size:11px; color:#9ca3af; margin-top:2px; }
+  section { background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:20px 22px; margin-top:18px; }
+  h2 { font-size:18px; margin:0 0 6px; }
+  .note { font-size:13px; color:#6b7280; margin:0 0 10px; }
+  .chartbox { position:relative; }
+  canvas { width:100%; display:block; background:#fff; }
+  .tip { position:absolute; pointer-events:none; background:rgba(17,24,39,.93); color:#f9fafb; font-size:12px; padding:8px 10px; border-radius:8px; line-height:1.55; white-space:nowrap; display:none; z-index:5; }
+  .legend { display:flex; gap:18px; flex-wrap:wrap; font-size:12px; color:#4b5563; margin-top:8px; }
+  .legend i { display:inline-block; width:12px; height:12px; border-radius:2px; margin-right:5px; vertical-align:-1px; }
+  .explain { margin-top:14px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:12px 16px; font-size:14px; }
+  .explain h3 { margin:0 0 8px; font-size:13px; color:#334155; }
+  .explain ul { margin:0; padding-left:18px; }
+  .explain li { margin:5px 0; line-height:1.65; }
+  .explain b { color:#0f172a; }
+  footer { font-size:12px; color:#6b7280; margin-top:24px; line-height:1.75; }
+  footer h3 { font-size:13px; color:#374151; margin:0 0 4px; }
+  footer ul { margin:4px 0 0; padding-left:18px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>__TITLE__</h1>
+  <div class="sub">__SUB__</div>
+  <div class="guide">__GUIDE__</div>
+  <div class="cards">__CARDS__</div>
+
+  <section>
+    <h2>1 · 策略净值 vs 买并持有 SPY</h2>
+    <p class="note">__NOTE1__</p>
+    <div class="chartbox"><canvas id="cEquity" style="height:420px"></canvas></div>
+    <div class="legend">
+      <span><i style="background:#2563eb"></i>策略净值（Sell Put）</span>
+      <span><i style="background:#f59e0b"></i>买并持有 SPY</span>
+    </div>
+    <div class="explain">__EX1__</div>
+  </section>
+
+  <section>
+    <h2>2 · 组合回撤（相对历史最高点）</h2>
+    <p class="note">__NOTE2__</p>
+    <div class="chartbox"><canvas id="cDD" style="height:380px"></canvas></div>
+    <div class="legend">
+      <span><i style="background:#dc2626"></i>策略回撤</span>
+      <span><i style="background:#9ca3af"></i>SPY 自身回撤（对照）</span>
+    </div>
+    <div class="explain">__EX2__</div>
+  </section>
+
+  <section>
+    <h2>3 · SPY 价格走势</h2>
+    <p class="note">__NOTE3__</p>
+    <div class="chartbox"><canvas id="cPrice" style="height:360px"></canvas></div>
+    <div class="legend">
+      <span><i style="background:#0ea5e9"></i>SPY 收盘价</span>
+    </div>
+    <div class="explain">__EX3__</div>
+  </section>
+
+  <section>
+    <h2>4 · 每笔交易盈亏分布</h2>
+    <p class="note">__NOTE4__</p>
+    <div class="chartbox"><canvas id="cHist" style="height:380px"></canvas></div>
+    <div class="legend">
+      <span><i style="background:#16a34a"></i>盈利的笔（PnL &gt; 0）</span>
+      <span><i style="background:#dc2626"></i>亏损的笔（PnL &lt; 0）</span>
+      <span><i style="background:#6b7280"></i>≤ −$10,000 的大亏合并柱</span>
+    </div>
+    <div class="explain">__EX4__</div>
+  </section>
+
+  <section>
+    <h2>5 · 交易时间线（全部 __NTRADES__ 笔）</h2>
+    <p class="note">__NOTE5__</p>
+    <div class="chartbox"><canvas id="cTL" style="height:660px"></canvas></div>
+    <div class="legend">
+      <span><i style="background:#334155"></i>开仓（每笔左端圆点）</span>
+      <span><i style="background:#16a34a"></i>止盈 50% 离场</span>
+      <span><i style="background:#f97316"></i>DTE ≤ 3 强退</span>
+    </div>
+    <div class="explain">__EX5__</div>
+  </section>
+
+  <footer>__FOOTER__</footer>
+</div>
+<script>
+"use strict";
+var DATA = __DATA__;
+var START_CASH = DATA.meta.start_cash;
+var REASON_LABEL = {};
+var REASON_COLOR = {};
+DATA.reasons.forEach(function (r) {
+  REASON_LABEL[r.key] = r.label;
+  REASON_COLOR[r.key] = r.color;
+});
+
+function parseDay(s) { return Date.parse(s + "T00:00:00Z"); }
+function fmtDate(ms) {
+  var d = new Date(ms);
+  var m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  var dd = String(d.getUTCDate()).padStart(2, "0");
+  return d.getUTCFullYear() + "-" + m + "-" + dd;
+}
+function fmtMoney(v) { return v.toLocaleString("en-US", { maximumFractionDigits: 0 }); }
+function fmtPct(v) { return (v * 100).toFixed(1) + "%"; }
+function fmtYear(ms) { return String(new Date(ms).getUTCFullYear()); }
+
+function nearestIdx(arr, t) {
+  if (t <= arr[0]) return 0;
+  var hi = arr.length - 1;
+  if (t >= arr[hi]) return hi;
+  var lo = 0;
+  while (lo < hi) {
+    var mid = (lo + hi) >> 1;
+    if (arr[mid] < t) lo = mid + 1; else hi = mid;
+  }
+  return (arr[lo] - t < t - arr[lo - 1]) ? lo : lo - 1;
+}
+
+function niceTicks(min, max, n) {
+  if (!isFinite(min) || !isFinite(max) || min === max) return [min];
+  var span = max - min;
+  var step0 = span / n;
+  var mag = Math.pow(10, Math.floor(Math.log10(step0)));
+  var norm = step0 / mag;
+  var step = mag * (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10);
+  var lo = Math.floor(min / step) * step;
+  var hi = Math.ceil(max / step) * step;
+  var out = [];
+  for (var v = lo; v <= hi + step * 1e-9; v += step) out.push(v);
+  return out;
+}
+
+function niceDateTicks(t0, t1) {
+  var yspan = (t1 - t0) / (365.25 * 86400000);
+  var stepY = yspan <= 6 ? 1 : yspan <= 24 ? 2 : yspan <= 50 ? 5 : 10;
+  var y0 = new Date(t0).getUTCFullYear();
+  var first = Math.ceil(y0 / stepY) * stepY;
+  var last = new Date(t1).getUTCFullYear();
+  var out = [];
+  for (var y = first; y <= last; y += stepY) out.push(Date.UTC(y, 0, 1));
+  return out;
+}
+
+function drawPhases(ctx, chart, phases) {
+  if (!phases) return;
+  for (var i = 0; i < phases.length; i++) {
+    var p = phases[i];
+    var x1 = chart.x(p.t0);
+    var x2 = chart.x(p.t1);
+    var top = chart.pad.t;
+    var bottom = chart.h - chart.pad.b;
+    if (x2 < chart.pad.l || x1 > chart.w - chart.pad.r) continue;
+    ctx.fillStyle = "rgba(100,116,139,0.10)";
+    ctx.fillRect(x1, top, x2 - x1, bottom - top);
+    ctx.fillStyle = "rgba(71,85,105,0.8)";
+    ctx.font = "11px 'Segoe UI','Microsoft YaHei',sans-serif";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText(p.name, Math.max(x1 + 6, chart.pad.l + 4), top + 5);
+  }
+}
+
+function LineChart(cv, opts) {
+  var self = this;
+  this.cv = cv;
+  this.o = opts || {};
+  this.series = this.o.series;
+  var dpr = window.devicePixelRatio || 1;
+  var w = cv.clientWidth || 900;
+  var h = cv.clientHeight || 400;
+  cv.width = Math.round(w * dpr);
+  cv.height = Math.round(h * dpr);
+  var ctx = cv.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  this.ctx = ctx;
+  this.w = w;
+  this.h = h;
+  this.pad = { l: 72, r: 20, t: 30, b: 36 };
+  var t0 = Infinity, t1 = -Infinity, ymin = Infinity, ymax = -Infinity;
+  for (var i = 0; i < this.series.length; i++) {
+    var s = this.series[i];
+    if (s.t[0] < t0) t0 = s.t[0];
+    if (s.t[s.t.length - 1] > t1) t1 = s.t[s.t.length - 1];
+    for (var j = 0; j < s.v.length; j++) {
+      var v = s.v[j];
+      if (v < ymin) ymin = v;
+      if (v > ymax) ymax = v;
+    }
+  }
+  if (this.o.yMin !== undefined) ymin = this.o.yMin;
+  if (this.o.yMax !== undefined) ymax = this.o.yMax;
+  if (ymax - ymin < 1e-9) ymax = ymin + 1;
+  this.t0 = t0;
+  this.t1 = t1;
+  this.y0 = ymin;
+  this.y1 = ymax;
+  var pw = w - this.pad.l - this.pad.r;
+  var ph = h - this.pad.t - this.pad.b;
+  this.x = function (t) { return self.pad.l + (t - t0) / (t1 - t0) * pw; };
+  this.y = function (v) { return self.pad.t + ph * (1 - (v - ymin) / (ymax - ymin)); };
+  this.draw();
+  this.attach();
+}
+
+LineChart.prototype.draw = function () {
+  var ctx = this.ctx;
+  var o = this.o;
+  ctx.clearRect(0, 0, this.w, this.h);
+  drawPhases(ctx, this, o.phases);
+  ctx.font = "11px 'Segoe UI','Microsoft YaHei',sans-serif";
+  var yticks = o.yTicks || niceTicks(this.y0, this.y1, 6);
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  for (var i = 0; i < yticks.length; i++) {
+    var v = yticks[i];
+    if (v < this.y0 - 1e-9 || v > this.y1 + 1e-9) continue;
+    var yy = this.y(v);
+    ctx.strokeStyle = "#eef1f4";
+    ctx.beginPath();
+    ctx.moveTo(this.pad.l, yy);
+    ctx.lineTo(this.w - this.pad.r, yy);
+    ctx.stroke();
+    ctx.fillStyle = "#6b7280";
+    ctx.fillText(o.fmtY ? o.fmtY(v) : String(Math.round(v * 100) / 100), this.pad.l - 8, yy);
+  }
+  var xticks = niceDateTicks(this.t0, this.t1);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  for (var k = 0; k < xticks.length; k++) {
+    var t = xticks[k];
+    var xx = this.x(t);
+    if (xx < this.pad.l || xx > this.w - this.pad.r) continue;
+    ctx.strokeStyle = "#f6f8fa";
+    ctx.beginPath();
+    ctx.moveTo(xx, this.pad.t);
+    ctx.lineTo(xx, this.h - this.pad.b);
+    ctx.stroke();
+    ctx.fillStyle = "#6b7280";
+    ctx.fillText(fmtYear(t), xx, this.h - this.pad.b + 8);
+  }
+  if (o.baseline !== undefined) {
+    var by = this.y(o.baseline);
+    ctx.strokeStyle = "#94a3b8";
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(this.pad.l, by);
+    ctx.lineTo(this.w - this.pad.r, by);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  for (var s = 0; s < this.series.length; s++) {
+    var se = this.series[s];
+    ctx.strokeStyle = se.color;
+    ctx.lineWidth = se.width || 1.6;
+    ctx.setLineDash(se.dash ? [5, 4] : []);
+    ctx.beginPath();
+    for (var m = 0; m < se.t.length; m++) {
+      var px = this.x(se.t[m]);
+      var py = this.y(se.v[m]);
+      if (m === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+    if (se.fill) {
+      var fb = (se.fillBase !== undefined) ? se.fillBase : this.y0;
+      var ly = this.y(fb);
+      ctx.lineTo(this.x(se.t[se.t.length - 1]), ly);
+      ctx.lineTo(this.x(se.t[0]), ly);
+      ctx.closePath();
+      ctx.globalAlpha = 0.13;
+      ctx.fillStyle = se.color;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+  }
+  if (o.annotations) {
+    for (var a = 0; a < o.annotations.length; a++) {
+      var an = o.annotations[a];
+      var ax = this.x(an.t);
+      var ay = this.y(an.v);
+      ctx.fillStyle = an.color || "#dc2626";
+      ctx.beginPath();
+      ctx.arc(ax, ay, 3.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.font = "12px 'Segoe UI','Microsoft YaHei',sans-serif";
+      var tw = ctx.measureText(an.label).width;
+      var bx = ax + 9;
+      var by2 = ay - 24;
+      if (bx + tw + 16 > this.w - 2) bx = ax - tw - 25;
+      if (by2 < 3) by2 = ay + 8;
+      ctx.fillStyle = "rgba(255,255,255,0.94)";
+      ctx.fillRect(bx, by2, tw + 16, 22);
+      ctx.strokeStyle = an.color || "#dc2626";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(bx, by2, tw + 16, 22);
+      ctx.fillStyle = "#111827";
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillText(an.label, bx + 8, by2 + 11);
+    }
+  }
+};
+
+LineChart.prototype.attach = function () {
+  var self = this;
+  var tip = document.createElement("div");
+  tip.className = "tip";
+  this.cv.parentElement.appendChild(tip);
+  this.cv.addEventListener("mousemove", function (ev) {
+    var r = self.cv.getBoundingClientRect();
+    var mx = ev.clientX - r.left;
+    var my = ev.clientY - r.top;
+    var inside = mx >= self.pad.l && mx <= self.w - self.pad.r &&
+                 my >= self.pad.t && my <= self.h - self.pad.b;
+    if (!inside) {
+      tip.style.display = "none";
+      self.draw();
+      return;
+    }
+    var s0 = self.series[0];
+    var t = self.t0 + (mx - self.pad.l) / (self.w - self.pad.l - self.pad.r) * (self.t1 - self.t0);
+    var i = nearestIdx(s0.t, t);
+    var bar = (self.t1 - self.t0) / Math.max(1, s0.t.length);
+    if (Math.abs(s0.t[i] - t) > bar * 3) {
+      tip.style.display = "none";
+      self.draw();
+      return;
+    }
+    var date = s0.t[i];
+    tip.style.display = "block";
+    tip.innerHTML = self.o.tip(self.series, i, date);
+    var tw = tip.offsetWidth;
+    var th = tip.offsetHeight;
+    var px = self.x(date);
+    var py = self.y(s0.v[i]);
+    var tx = px + 14;
+    var ty = py - th - 10;
+    if (tx + tw > self.w - 4) tx = px - tw - 14;
+    if (ty < 4) ty = py + 14;
+    tip.style.left = tx + "px";
+    tip.style.top = ty + "px";
+    self.draw();
+    var ctx = self.ctx;
+    ctx.save();
+    ctx.strokeStyle = "#94a3b8";
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(px, self.pad.t);
+    ctx.lineTo(px, self.h - self.pad.b);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    for (var k = 0; k < self.series.length; k++) {
+      var s = self.series[k];
+      var j = nearestIdx(s.t, date);
+      if (j < 0) continue;
+      ctx.fillStyle = s.color;
+      ctx.beginPath();
+      ctx.arc(self.x(s.t[j]), self.y(s.v[j]), 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  });
+  this.cv.addEventListener("mouseleave", function () {
+    tip.style.display = "none";
+    self.draw();
+  });
+};
+
+function HistChart(cv, bins, opts) {
+  var dpr = window.devicePixelRatio || 1;
+  var w = cv.clientWidth || 900;
+  var h = cv.clientHeight || 380;
+  cv.width = Math.round(w * dpr);
+  cv.height = Math.round(h * dpr);
+  var ctx = cv.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  this.ctx = ctx;
+  this.w = w;
+  this.h = h;
+  this.bins = bins;
+  this.o = opts;
+  this.cv = cv;
+  this.n = bins.length;
+  this.pad = { l: 56, r: 14, t: 16, b: 40 };
+  this.maxN = 0;
+  for (var i = 0; i < bins.length; i++) {
+    if (bins[i].n > this.maxN) this.maxN = bins[i].n;
+  }
+  this.draw();
+  this.attach();
+}
+HistChart.prototype.x = function (i) {
+  return this.pad.l + i / this.n * (this.w - this.pad.l - this.pad.r);
+};
+HistChart.prototype.bw = function () {
+  return (this.w - this.pad.l - this.pad.r) / this.n;
+};
+HistChart.prototype.draw = function () {
+  var ctx = this.ctx;
+  var ph = this.h - this.pad.t - this.pad.b;
+  ctx.clearRect(0, 0, this.w, this.h);
+  ctx.font = "11px 'Segoe UI','Microsoft YaHei',sans-serif";
+  var ymax = Math.max(1, this.maxN);
+  var yticks = [0, Math.round(ymax / 2), ymax];
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  for (var i = 0; i < yticks.length; i++) {
+    var yy = this.pad.t + ph * (1 - yticks[i] / ymax);
+    ctx.strokeStyle = "#eef1f4";
+    ctx.beginPath();
+    ctx.moveTo(this.pad.l, yy);
+    ctx.lineTo(this.w - this.pad.r, yy);
+    ctx.stroke();
+    ctx.fillStyle = "#6b7280";
+    ctx.fillText(String(yticks[i]), this.pad.l - 8, yy);
+  }
+  for (var k = 0; k < this.n; k++) {
+    var b = this.bins[k];
+    if (!b.n) continue;
+    var x = this.x(k);
+    var hh = ph * (b.n / ymax);
+    var y = this.pad.t + ph - hh;
+    var color = b.overflow ? "#6b7280" : ((b.lo + b.hi) / 2 >= 0 ? "#16a34a" : "#dc2626");
+    ctx.fillStyle = color;
+    ctx.fillRect(x + 1, y, this.bw() - 2, hh);
+  }
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  ctx.fillStyle = "#6b7280";
+  for (var m = 0; m < this.n; m++) {
+    var bb = this.bins[m];
+    var lab = null;
+    if (bb.overflow) lab = "≤ −10k";
+    else if (bb.lo === -5000) lab = "−5k";
+    else if (bb.lo === 0) lab = "0";
+    else if (bb.lo === 5000) lab = "+5k";
+    if (lab) ctx.fillText(lab, this.x(m) + this.bw() / 2, this.h - this.pad.b + 8);
+  }
+  ctx.textAlign = "left";
+  ctx.fillText("+10k", this.w - this.pad.r + 2, this.h - this.pad.b + 8);
+  ctx.strokeStyle = "#cbd5e1";
+  ctx.beginPath();
+  ctx.moveTo(this.pad.l, this.pad.t + ph);
+  ctx.lineTo(this.w - this.pad.r, this.pad.t + ph);
+  ctx.stroke();
+};
+HistChart.prototype.attach = function () {
+  var self = this;
+  var tip = document.createElement("div");
+  tip.className = "tip";
+  this.cv.parentElement.appendChild(tip);
+  this.cv.addEventListener("mousemove", function (ev) {
+    var r = self.cv.getBoundingClientRect();
+    var mx = ev.clientX - r.left;
+    var my = ev.clientY - r.top;
+    var inside = mx >= self.pad.l && mx <= self.w - self.pad.r &&
+                 my >= self.pad.t && my <= self.h - self.pad.b;
+    if (!inside) {
+      tip.style.display = "none";
+      self.draw();
+      return;
+    }
+    var i = Math.floor((mx - self.pad.l) / (self.w - self.pad.l - self.pad.r) * self.n);
+    if (i < 0) i = 0;
+    if (i >= self.n) i = self.n - 1;
+    var b = self.bins[i];
+    var range = b.overflow
+      ? "≤ −$10,000"
+      : "[$" + b.lo.toLocaleString("en-US") + ", $" + b.hi.toLocaleString("en-US") + ")";
+    tip.style.display = "block";
+    tip.innerHTML = "<b>" + range + "</b><br>" + b.n + " 笔（占全部 " +
+      (b.n / self.o.total * 100).toFixed(1) + "%）";
+    var tw = tip.offsetWidth;
+    var th = tip.offsetHeight;
+    var tx = mx + 14;
+    var ty = my - th - 10;
+    if (tx + tw > self.w - 4) tx = mx - tw - 14;
+    if (ty < 4) ty = my + 14;
+    tip.style.left = tx + "px";
+    tip.style.top = ty + "px";
+    self.draw();
+    var ctx = self.ctx;
+    ctx.strokeStyle = "#0f172a";
+    ctx.lineWidth = 1.2;
+    ctx.strokeRect(self.x(i) + 0.5, self.pad.t, self.bw() - 1, self.h - self.pad.t - self.pad.b);
+  });
+  this.cv.addEventListener("mouseleave", function () {
+    tip.style.display = "none";
+    self.draw();
+  });
+};
+
+function TimelineChart(cv, trades, opts) {
+  var self = this;
+  var dpr = window.devicePixelRatio || 1;
+  var w = cv.clientWidth || 900;
+  var h = cv.clientHeight || 600;
+  cv.width = Math.round(w * dpr);
+  cv.height = Math.round(h * dpr);
+  var ctx = cv.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  this.ctx = ctx;
+  this.w = w;
+  this.h = h;
+  this.o = opts;
+  this.cv = cv;
+  this.trades = trades;
+  this.n = trades.length;
+  this.pad = { l: 40, r: 16, t: 26, b: 30 };
+  this.t0 = parseDay(opts.t0);
+  this.t1 = parseDay(opts.t1);
+  var pw = w - this.pad.l - this.pad.r;
+  var ph = h - this.pad.t - this.pad.b;
+  this.x = function (t) { return self.pad.l + (t - self.t0) / (self.t1 - self.t0) * pw; };
+  this.y = function (i) { return self.pad.t + (i + 0.5) / self.n * ph; };
+  this.draw();
+  this.attach();
+}
+TimelineChart.prototype.draw = function () {
+  var ctx = this.ctx;
+  ctx.clearRect(0, 0, this.w, this.h);
+  drawPhases(ctx, this, this.o.phases);
+  ctx.font = "11px 'Segoe UI','Microsoft YaHei',sans-serif";
+  var xticks = niceDateTicks(this.t0, this.t1);
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  for (var k = 0; k < xticks.length; k++) {
+    var t = xticks[k];
+    var xx = this.x(t);
+    if (xx < this.pad.l || xx > this.w - this.pad.r) continue;
+    ctx.strokeStyle = "#f6f8fa";
+    ctx.beginPath();
+    ctx.moveTo(xx, this.pad.t);
+    ctx.lineTo(xx, this.h - this.pad.b);
+    ctx.stroke();
+    ctx.fillStyle = "#6b7280";
+    ctx.fillText(fmtYear(t), xx, this.h - this.pad.b + 8);
+  }
+  for (var i = 0; i < this.n; i++) {
+    var tr = this.trades[i];
+    var x0 = this.x(tr.t0);
+    var x1 = this.x(tr.t1);
+    var yy = this.y(i);
+    var col = REASON_COLOR[tr.exit_reason] || "#6b7280";
+    ctx.strokeStyle = col;
+    ctx.globalAlpha = 0.75;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x0, yy);
+    ctx.lineTo(x1, yy);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = "#334155";
+    ctx.beginPath();
+    ctx.arc(x0, yy, 1.6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    ctx.arc(x1, yy, 1.6, 0, Math.PI * 2);
+    ctx.fill();
+  }
+};
+TimelineChart.prototype.attach = function () {
+  var self = this;
+  var tip = document.createElement("div");
+  tip.className = "tip";
+  this.cv.parentElement.appendChild(tip);
+  this.cv.addEventListener("mousemove", function (ev) {
+    var r = self.cv.getBoundingClientRect();
+    var mx = ev.clientX - r.left;
+    var my = ev.clientY - r.top;
+    var inside = mx >= self.pad.l && mx <= self.w - self.pad.r &&
+                 my >= self.pad.t && my <= self.h - self.pad.b;
+    if (!inside) {
+      tip.style.display = "none";
+      self.draw();
+      return;
+    }
+    var ph = self.h - self.pad.t - self.pad.b;
+    var row = Math.floor((my - self.pad.t) / ph * self.n);
+    if (row < 0) row = 0;
+    if (row >= self.n) row = self.n - 1;
+    var tr = self.trades[row];
+    var x0 = self.x(tr.t0);
+    var x1 = self.x(tr.t1);
+    if (mx < x0 - 4 || mx > x1 + 4) {
+      tip.style.display = "none";
+      self.draw();
+      return;
+    }
+    tip.style.display = "block";
+    tip.innerHTML = self.o.tip(tr);
+    var tw = tip.offsetWidth;
+    var th = tip.offsetHeight;
+    var tx = mx + 14;
+    var ty = my - th - 10;
+    if (tx + tw > self.w - 4) tx = mx - tw - 14;
+    if (ty < 4) ty = my + 14;
+    tip.style.left = tx + "px";
+    tip.style.top = ty + "px";
+    self.draw();
+    var ctx = self.ctx;
+    ctx.strokeStyle = "#0f172a";
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    ctx.moveTo(x0, self.y(row));
+    ctx.lineTo(x1, self.y(row));
+    ctx.stroke();
+  });
+  this.cv.addEventListener("mouseleave", function () {
+    tip.style.display = "none";
+    self.draw();
+  });
+};
+
+function runningMaxDrawdown(v) {
+  var out = new Array(v.length);
+  var mx = -Infinity;
+  for (var i = 0; i < v.length; i++) {
+    if (v[i] > mx) mx = v[i];
+    out[i] = mx > 0 ? v[i] / mx - 1 : 0;
+  }
+  return out;
+}
+
+var statesT = DATA.states.t.map(parseDay);
+var eqArr = DATA.states.eq;
+var benchArr = DATA.states.bench;
+var bhArr = benchArr.map(function (b) { return START_CASH * b / benchArr[0]; });
+var phases = DATA.phases.map(function (p) {
+  return { name: p.name, t0: parseDay(p.from), t1: parseDay(p.to) };
+});
+
+new LineChart(document.getElementById("cEquity"), {
+  series: [
+    { t: statesT, v: eqArr, color: "#2563eb", width: 1.8 },
+    { t: statesT, v: bhArr, color: "#f59e0b", width: 1.2 }
+  ],
+  phases: phases,
+  baseline: START_CASH,
+  fmtY: function (v) { return "$" + Math.round(v / 1000) + "k"; },
+  tip: function (series, i, date) {
+    var eq = series[0].v[i];
+    var bh = series[1].v[i];
+    return "<b>" + fmtDate(date) + "</b><br>策略净值 $" + fmtMoney(eq) +
+      "（" + fmtPct(eq / START_CASH - 1) + "）<br>买并持有 $" + fmtMoney(bh) +
+      "（" + fmtPct(bh / START_CASH - 1) + "）";
+  }
+});
+
+var eqDD = runningMaxDrawdown(eqArr);
+var bhDD = runningMaxDrawdown(benchArr);
+
+new LineChart(document.getElementById("cDD"), {
+  series: [
+    { t: statesT, v: eqDD, color: "#dc2626", width: 1.5, fill: true, fillBase: 0 },
+    { t: statesT, v: bhDD, color: "#9ca3af", width: 1.1 }
+  ],
+  phases: phases,
+  yMin: -0.9,
+  yMax: 0,
+  yTicks: [-0.8, -0.6, -0.4, -0.2, 0],
+  fmtY: function (v) { return (v * 100).toFixed(0) + "%"; },
+  annotations: DATA.dd_annotations.map(function (a) {
+    return { t: parseDay(a.t), v: a.v, label: a.label };
+  }),
+  tip: function (series, i, date) {
+    return "<b>" + fmtDate(date) + "</b><br>策略回撤 " + fmtPct(series[0].v[i]) +
+      "<br>SPY 回撤 " + fmtPct(series[1].v[i]);
+  }
+});
+
+var priceT = DATA.prices.t.map(parseDay);
+new LineChart(document.getElementById("cPrice"), {
+  series: [{ t: priceT, v: DATA.prices.c, color: "#0ea5e9", width: 1.4 }],
+  phases: phases,
+  fmtY: function (v) { return "$" + Math.round(v); },
+  tip: function (series, i, date) {
+    return "<b>" + fmtDate(date) + "</b><br>SPY 收盘 $" + series[0].v[i].toFixed(2);
+  }
+});
+
+new HistChart(document.getElementById("cHist"), DATA.bins, { total: DATA.meta.n_trades });
+
+var tlTrades = DATA.trades.map(function (t) {
+  return {
+    id: t.id,
+    strike: t.strike,
+    expiry: t.expiry,
+    qty: t.qty,
+    entry_date: t.entry_date,
+    exit_date: t.exit_date,
+    pnl: t.pnl,
+    exit_reason: t.exit_reason,
+    entry_iv: t.entry_iv,
+    delta_at_entry: t.delta_at_entry,
+    hold: t.hold,
+    t0: parseDay(t.entry_date),
+    t1: parseDay(t.exit_date)
+  };
+});
+new TimelineChart(document.getElementById("cTL"), tlTrades, {
+  t0: DATA.meta.start,
+  t1: DATA.meta.end,
+  phases: phases,
+  tip: function (tr) {
+    return "<b>#" + tr.id + " · " + tr.entry_date + " → " + tr.exit_date + "</b>" +
+      "<br>持有 " + tr.hold + " 天 · 行权价 " + tr.strike + " · 到期 " + tr.expiry +
+      " · " + tr.qty + " 张" +
+      "<br>入场 Δ " + tr.delta_at_entry.toFixed(3) + " · IV " +
+      (tr.entry_iv * 100).toFixed(1) + "%" +
+      "<br>PnL " + (tr.pnl >= 0 ? "+$" : "-$") + fmtMoney(Math.abs(tr.pnl)) +
+      "（" + REASON_LABEL[tr.exit_reason] + "）";
+  }
+});
+</script>
+</body>
+</html>
