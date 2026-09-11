@@ -61,6 +61,8 @@ def make_ctx(
         sizing=SizingConfig(),
         margin_model=SimplifiedRegTMargin(),
         underlier_kind="equity",
+        first_session=today,
+        last_session=today,
     )
     return strat, ctx
 
@@ -138,7 +140,7 @@ def test_entry_selects_dte_and_delta():
     assert intent.action is OrderAction.OPEN
     assert intent.reason is OrderReason.ENTRY
     # DTE：02-21（dte 30）比 03-21（dte 51）更接近目标
-    assert intent.option.expiry == EXPIRY
+    assert intent.asset.expiry == EXPIRY
     # delta：独立用 BS 计算期望行权价
     bs = BlackScholesEngine()
     T = (EXPIRY - today).days / 365.0
@@ -149,7 +151,7 @@ def test_entry_selects_dte_and_delta():
                      right=OptionRight.PUT).greeks.delta + 0.20
         ),
     )
-    assert intent.option.strike == expected
+    assert intent.asset.strike == expected
 
 
 def test_weekly_entry_frequency():

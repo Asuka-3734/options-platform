@@ -5,6 +5,7 @@
     uv run python scripts/run_backtest.py --start 2015-01-01 --end 2024-12-31
     uv run python scripts/run_backtest.py --offline          # 只用本地缓存/手动 CSV，不联网
     uv run python scripts/run_backtest.py --csv data/my.csv  # 指定手动数据文件
+    uv run python scripts/run_backtest.py --strategy buy_hold  # 买入持有策略（M1-B 多策略）
 
 数据获取顺序：本地缓存 data/spy_daily.csv → yfinance（走 HTTPS_PROXY 代理）
 → 手动 CSV 兜底。首次联网成功后自动写缓存，之后完全离线可复现。
@@ -29,8 +30,15 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
-from sellput.config import BacktestConfig, DataConfig, HybridConfig  # noqa: E402
-from sellput.instruments import NyseCalendar  # noqa: E402
+from sellput.config import (  # noqa: E402
+    BacktestConfig,
+    BuyHoldParams,
+    DataConfig,
+    HybridConfig,
+    SellPutParams,
+    StrategyConfig,
+)
+from sellput.instruments import NyseCalendar, OptionSpec  # noqa: E402
 from sellput.market_data import build_provider  # noqa: E402
 from sellput.sim import SimulationEngine  # noqa: E402
 
@@ -47,7 +55,10 @@ REASON_ZH = {
     "assign": "到期指派",
     "assign_cash": "现金结算",
     "force_liquidation": "强平",
+    "hold_end": "持有到期清仓",
 }
+
+STRATEGY_LABEL = {"sell_put": "Sell Put", "buy_hold": "Buy & Hold"}
 
 
 def _date(s: str) -> date:
@@ -63,6 +74,12 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     ap.add_argument("--out", default="experiments/m1a")
     ap.add_argument("--offline", action="store_true", help="禁用网络（只用缓存/手动 CSV）")
     ap.add_argument("--csv", default=None, help="手动数据文件路径（兜底）")
+    ap.add_argument(
+        "--strategy",
+        choices=["sell_put", "buy_hold"],
+        default="sell_put",
+        help="策略类型（M1-B 多策略：sell_put / buy_hold）",
+    )
     return ap.parse_args(argv)
 
 
@@ -70,19 +87,22 @@ def pct(x: float) -> str:
     return f"{x * 100:+.2f}%"
 
 
-def plot_equity(states, symbol: str, start: date, end: date, start_cash: float, path: Path) -> None:
+def plot_equity(
+    states, symbol: str, start: date, end: date, start_cash: float, path: Path,
+    strategy_label: str = "Sell Put",
+) -> None:
     dates = pd.to_datetime([s.date for s in states])
     eq = np.array([s.equity for s in states]) / start_cash
     bench = np.array([s.benchmark_price for s in states]) / states[0].benchmark_price
     fig, (ax1, ax2) = plt.subplots(
         2, 1, figsize=(12, 8), sharex=True, gridspec_kw={"height_ratios": [3, 1]}
     )
-    ax1.plot(dates, eq, label="策略净值（Sell Put）", lw=1.6, color="#1f77b4")
+    ax1.plot(dates, eq, label=f"策略净值（{strategy_label}）", lw=1.6, color="#1f77b4")
     ax1.plot(dates, bench, label="买并持有 SPY", lw=1.2, alpha=0.75, color="#ff7f0e")
     ax1.axhline(1.0, color="gray", lw=0.8, ls="--")
     ax1.set_ylabel("净值（起始 = 1.0）")
     ax1.set_title(
-        f"Sell Put 回测收益曲线（{symbol} {start} ~ {end}，标的真实 / 期权合成报价）"
+        f"{strategy_label} 回测收益曲线（{symbol} {start} ~ {end}，标的真实 / 期权合成报价）"
     )
     ax1.legend(loc="upper left")
     ax1.grid(alpha=0.3)
@@ -97,8 +117,14 @@ def plot_equity(states, symbol: str, start: date, end: date, start_cash: float, 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    strat_label = STRATEGY_LABEL[args.strategy]
+    strategy = (
+        StrategyConfig(type="sell_put", params=SellPutParams())
+        if args.strategy == "sell_put"
+        else StrategyConfig(type="buy_hold", params=BuyHoldParams())
+    )
     cfg = BacktestConfig(
-        run={"name": "m1a", "seed": args.seed},
+        run={"name": "m1b" if args.strategy == "buy_hold" else "m1a", "seed": args.seed},
         data=DataConfig(
             provider="hybrid",
             symbol=args.symbol,
@@ -106,6 +132,7 @@ def main(argv: list[str] | None = None) -> int:
             end=args.end,
             hybrid=HybridConfig(csv_path=args.csv, offline=args.offline),
         ),
+        strategy=strategy,
     )
     provider = build_provider(cfg)
     engine = SimulationEngine(cfg)
@@ -122,7 +149,7 @@ def main(argv: list[str] | None = None) -> int:
     out.mkdir(parents=True, exist_ok=True)
 
     print("=" * 78)
-    print(f"Sell Put 回测报告（M1-A · 标的 {args.symbol} 真实日线 / 期权合成报价）")
+    print(f"{strat_label} 回测报告（M1-B · 标的 {args.symbol} 真实日线 / 期权合成报价）")
     print("=" * 78)
     print(f"区间: {args.start} → {args.end}   交易日: {len(states)}   "
           f"引擎耗时: {result.duration_seconds:.2f}s")
@@ -157,16 +184,18 @@ def main(argv: list[str] | None = None) -> int:
                 "id": t.id,
                 "开仓日": t.entry_date,
                 "平仓日": t.exit_date,
-                "到期": t.spec.expiry,
-                "行权价": t.spec.strike,
-                "张数": t.qty,
+                "标的": t.spec.symbol if t.asset_kind == "equity" else t.spec.underlying,
+                "到期": t.spec.expiry if isinstance(t.spec, OptionSpec) else "—",
+                "行权价": t.spec.strike if isinstance(t.spec, OptionSpec) else "—",
+                "张数": t.qty if isinstance(t.spec, OptionSpec) else "—",
+                "股数": t.qty if t.asset_kind == "equity" else "—",
                 "开仓价": round(t.entry_price, 2),
                 "平仓价": round(t.exit_price, 2),
                 "PnL": round(t.pnl, 2),
                 "离场": REASON_ZH.get(t.exit_reason, t.exit_reason),
-                "入场DTE": t.dte_at_entry,
-                "入场Δ": round(t.delta_at_entry, 3),
-                "入场IV": round(t.entry_iv, 4),
+                "入场DTE": t.dte_at_entry if t.dte_at_entry is not None else "—",
+                "入场Δ": round(t.delta_at_entry, 3) if t.delta_at_entry is not None else "—",
+                "入场IV": round(t.entry_iv, 4) if t.entry_iv is not None else "—",
             }
             for t in trades[:10]
         ]
@@ -197,8 +226,10 @@ def main(argv: list[str] | None = None) -> int:
         [
             {
                 "id": t.id,
-                "strike": t.spec.strike,
-                "expiry": t.spec.expiry,
+                "asset_kind": t.asset_kind,
+                "symbol": t.spec.symbol if t.asset_kind == "equity" else t.spec.underlying,
+                "strike": t.spec.strike if isinstance(t.spec, OptionSpec) else None,
+                "expiry": t.spec.expiry if isinstance(t.spec, OptionSpec) else None,
                 "qty": t.qty,
                 "entry_date": t.entry_date,
                 "exit_date": t.exit_date,
@@ -216,10 +247,14 @@ def main(argv: list[str] | None = None) -> int:
         ]
     ).to_csv(out / "trades.csv", index=False)
     provider.prices_frame().to_csv(out / "prices.csv", index=False)
-    plot_equity(states, args.symbol, args.start, args.end, start_cash, out / "equity_curve.png")
+    plot_equity(
+        states, args.symbol, args.start, args.end, start_cash, out / "equity_curve.png",
+        strategy_label=strat_label,
+    )
     (out / "summary.txt").write_text(
         f"symbol={args.symbol}\nstart={args.start}\nend={args.end}\nseed={args.seed}\n"
-        f"sessions={len(states)}\ntrades={len(trades)}\nduration_s={result.duration_seconds:.2f}\n"
+        f"strategy={args.strategy}\nsessions={len(states)}\ntrades={len(trades)}\n"
+        f"duration_s={result.duration_seconds:.2f}\n"
         f"final_equity={final_equity:.2f}\ntotal_return={total_return:.6f}\n"
         f"benchmark_return={bench:.6f}\nmax_drawdown={max_dd:.6f}\n",
         encoding="utf-8",

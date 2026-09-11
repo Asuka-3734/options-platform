@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class RunConfig(BaseModel):
@@ -111,9 +111,27 @@ class SellPutParams(BaseModel):
     max_open_positions: int = 1
 
 
+class BuyHoldParams(BaseModel):
+    """M1-B 买入持有：期初投入起始资金的 allocation 比例（默认 100%，取整股）。
+
+    分红不付现（与价格型基准口径一致，Spec §10 M1-B）；中途零订单；期末清仓。
+    """
+
+    allocation: float = Field(default=1.0, gt=0.0, le=1.0)
+
+
 class StrategyConfig(BaseModel):
-    type: Literal["sell_put"] = "sell_put"
-    params: SellPutParams = SellPutParams()
+    type: Literal["sell_put", "buy_hold"] = "sell_put"
+    params: SellPutParams | BuyHoldParams = Field(default_factory=SellPutParams)
+
+    @model_validator(mode="after")
+    def _params_match_type(self) -> StrategyConfig:
+        expected: type[SellPutParams | BuyHoldParams] = (
+            SellPutParams if self.type == "sell_put" else BuyHoldParams
+        )
+        if not isinstance(self.params, expected):
+            raise ValueError(f"strategy type '{self.type}' expects {expected.__name__} params")
+        return self
 
 
 class BacktestConfig(BaseModel):

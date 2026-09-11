@@ -96,6 +96,7 @@
       <span><i style="background:#334155"></i>开仓（每笔左端圆点）</span>
       <span><i style="background:#16a34a"></i>止盈 50% 离场</span>
       <span><i style="background:#f97316"></i>DTE ≤ 3 强退</span>
+      <span><i style="background:#0ea5e9"></i>持有到期清仓（股票）</span>
     </div>
     <div class="explain">__EX5__</div>
   </section>
@@ -440,7 +441,8 @@ HistChart.prototype.draw = function () {
     var x = this.x(k);
     var hh = ph * (b.n / ymax);
     var y = this.pad.t + ph - hh;
-    var color = b.overflow ? "#6b7280" : ((b.lo + b.hi) / 2 >= 0 ? "#16a34a" : "#dc2626");
+    var color = b.overflow ? "#6b7280" : b.hi_overflow ? "#16a34a" :
+      ((b.lo + b.hi) / 2 >= 0 ? "#16a34a" : "#dc2626");
     ctx.fillStyle = color;
     ctx.fillRect(x + 1, y, this.bw() - 2, hh);
   }
@@ -451,13 +453,12 @@ HistChart.prototype.draw = function () {
     var bb = this.bins[m];
     var lab = null;
     if (bb.overflow) lab = "≤ −10k";
+    else if (bb.hi_overflow) lab = "≥ +10k";
     else if (bb.lo === -5000) lab = "−5k";
     else if (bb.lo === 0) lab = "0";
     else if (bb.lo === 5000) lab = "+5k";
-    if (lab) ctx.fillText(lab, this.x(m) + this.bw() / 2, this.h - this.pad.b + 8);
+    if (lab && bb.n) ctx.fillText(lab, this.x(m) + this.bw() / 2, this.h - this.pad.b + 8);
   }
-  ctx.textAlign = "left";
-  ctx.fillText("+10k", this.w - this.pad.r + 2, this.h - this.pad.b + 8);
   ctx.strokeStyle = "#cbd5e1";
   ctx.beginPath();
   ctx.moveTo(this.pad.l, this.pad.t + ph);
@@ -486,7 +487,9 @@ HistChart.prototype.attach = function () {
     var b = self.bins[i];
     var range = b.overflow
       ? "≤ −$10,000"
-      : "[$" + b.lo.toLocaleString("en-US") + ", $" + b.hi.toLocaleString("en-US") + ")";
+      : b.hi_overflow
+        ? "≥ +$10,000"
+        : "[$" + b.lo.toLocaleString("en-US") + ", $" + b.hi.toLocaleString("en-US") + ")";
     tip.style.display = "block";
     tip.innerHTML = "<b>" + range + "</b><br>" + b.n + " 笔（占全部 " +
       (b.n / self.o.total * 100).toFixed(1) + "%）";
@@ -705,6 +708,8 @@ new HistChart(document.getElementById("cHist"), DATA.bins, { total: DATA.meta.n_
 var tlTrades = DATA.trades.map(function (t) {
   return {
     id: t.id,
+    asset_kind: t.asset_kind,
+    symbol: t.symbol,
     strike: t.strike,
     expiry: t.expiry,
     qty: t.qty,
@@ -724,6 +729,12 @@ new TimelineChart(document.getElementById("cTL"), tlTrades, {
   t1: DATA.meta.end,
   phases: phases,
   tip: function (tr) {
+    if (tr.asset_kind === "equity") {
+      return "<b>#" + tr.id + " · " + tr.entry_date + " → " + tr.exit_date + "</b>" +
+        "<br>买入 " + tr.qty + " 股 " + tr.symbol + " · 持有 " + tr.hold + " 天" +
+        "<br>PnL " + (tr.pnl >= 0 ? "+$" : "-$") + fmtMoney(Math.abs(tr.pnl)) +
+        "（" + REASON_LABEL[tr.exit_reason] + "）";
+    }
     return "<b>#" + tr.id + " · " + tr.entry_date + " → " + tr.exit_date + "</b>" +
       "<br>持有 " + tr.hold + " 天 · 行权价 " + tr.strike + " · 到期 " + tr.expiry +
       " · " + tr.qty + " 张" +

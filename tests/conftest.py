@@ -129,6 +129,9 @@ class NullStrategy:
     def on_open(self, ctx) -> list[OrderIntent]:
         return []
 
+    def on_final(self, ctx) -> list[OrderIntent]:
+        return []
+
 
 class FixedStrategy:
     """固定发单（超额订单 / 强平路径测试用）。"""
@@ -138,6 +141,9 @@ class FixedStrategy:
 
     def on_open(self, ctx) -> list[OrderIntent]:
         return list(self.intents)
+
+    def on_final(self, ctx) -> list[OrderIntent]:
+        return []
 
 
 class OnceStrategy:
@@ -153,6 +159,9 @@ class OnceStrategy:
         self.done = True
         return list(self.intents)
 
+    def on_final(self, ctx) -> list[OrderIntent]:
+        return []
+
 
 class RecordingStrategy:
     """记录 (prev_close 日期, OrderIntent 元组) 的代理（防前视测试用）。"""
@@ -165,6 +174,9 @@ class RecordingStrategy:
         intents = self.inner.on_open(ctx)
         self.log.append((ctx.prev_close.date, tuple(intents)))
         return intents
+
+    def on_final(self, ctx) -> list[OrderIntent]:
+        return []
 
 
 def make_config(

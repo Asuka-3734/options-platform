@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from datetime import date
 
 from .config import BacktestConfig
 from .dividend import ContinuousYieldDividendModel, DividendModel, PerDayDividendModel
@@ -22,8 +23,10 @@ from .execution import (
     OrderReason,
 )
 from .instruments import (
+    EquitySpec,
     OptionId,
     OptionRight,
+    OptionSpec,
     OptionStyle,
     Settlement,
     TradingCalendar,
@@ -34,7 +37,7 @@ from .margin import MarginModel, build_margin_model
 from .market_data import MarketDataProvider, Session
 from .portfolio import Portfolio, PortfolioState, PositionSnapshot, Trade
 from .pricing import BlackScholesEngine, CRRBinomialEngine, PricingEngine, implied_vol
-from .strategy import SellPutStrategy, Strategy, StrategyContext
+from .strategy import BuyHoldStrategy, SellPutStrategy, Strategy, StrategyContext
 
 
 @dataclass(slots=True)
@@ -70,6 +73,8 @@ def build_dividend_model(cfg: BacktestConfig, provider: object) -> DividendModel
 def build_strategy(cfg: BacktestConfig) -> Strategy:
     if cfg.strategy.type == "sell_put":
         return SellPutStrategy(cfg.strategy.params)
+    if cfg.strategy.type == "buy_hold":
+        return BuyHoldStrategy(cfg.strategy.params)
     raise ValueError(f"unknown strategy type: {cfg.strategy.type}")
 
 
@@ -123,34 +128,56 @@ class SimulationEngine:
                     )
                 pending_equity_sales.clear()
 
-            # (b) 信号：只读 prev_close（= t−1 收盘）；强平日跳过策略防立刻重新开仓
+            # (b) 信号：只读 prev_close（= t−1 收盘）；强平日跳过策略防立刻重新开仓。
+            # M1-B：on_final 为期末钩子，无条件调用（买入持有期末清仓不受保证金阻断影响）。
+            ctx = StrategyContext(
+                prev_close=prev_close,
+                portfolio=portfolio,
+                pricing=engine,
+                dividend_model=dividend,
+                calendar=calendar,
+                params=cfg.strategy.params,
+                sizing=cfg.account.sizing,
+                margin_model=margin,
+                underlier_kind=kind,
+                first_session=sessions[0],
+                last_session=sessions[-1],
+            )
             intents: list[OrderIntent] = []
             if not (cfg.simulation.margin_policy == "liquidate" and pending_force):
                 if not margin_blocked:
-                    ctx = StrategyContext(
-                        prev_close=prev_close,
-                        portfolio=portfolio,
-                        pricing=engine,
-                        dividend_model=dividend,
-                        calendar=calendar,
-                        params=cfg.strategy.params,
-                        sizing=cfg.account.sizing,
-                        margin_model=margin,
-                        underlier_kind=kind,
-                    )
                     intents = strategy.on_open(ctx)
+                if t == sessions[-1]:
+                    intents.extend(strategy.on_final(ctx))
             intents = pending_force + intents
             pending_force.clear()
 
             # (c) 成交（Open(t)）；成交前补全快照：持仓与下单行权价必须可报价
             if intents:
                 open_extras = {(p.spec.expiry, p.spec.strike) for p in portfolio.options.values()}
-                open_extras |= {(i.option.expiry, i.option.strike) for i in intents}
+                open_extras |= {
+                    (i.asset.expiry, i.asset.strike)
+                    for i in intents
+                    if isinstance(i.asset, OptionSpec)
+                }
                 open_snap = provider.open_snapshot(t, extra_strikes=open_extras)
             for intent in intents:
                 order_seq += 1
                 order = Order(id=order_seq, intent=intent, ts=t)
-                spec = intent.option
+                if isinstance(intent.asset, EquitySpec):
+                    self._fill_equity(
+                        intent=intent,
+                        portfolio=portfolio,
+                        margin=margin,
+                        kind=kind,
+                        open_snap=open_snap,
+                        fill_model=fill_model,
+                        t=t,
+                        order=order,
+                        orders=orders,
+                    )
+                    continue
+                spec = intent.asset
                 if intent.action is OrderAction.OPEN and not self._margin_ok(
                     intent, portfolio, margin, kind, open_snap
                 ):
@@ -160,13 +187,13 @@ class SimulationEngine:
                     continue
                 is_buy = intent.action is OrderAction.CLOSE  # M0：开=卖、平=买（仅空头 Put）
                 price = fill_model.option_price(open_snap, spec, is_buy)
-                commission = fill_model.commission(intent.contracts)
+                commission = fill_model.commission(intent.qty)
                 fill = Fill(
                     id=order_seq,
                     order_id=order.id,
                     ts=t,
                     price=price,
-                    contracts=intent.contracts,
+                    contracts=intent.qty,
                     commission=commission,
                     slippage_bps=fill_model.slippage_bps,
                     session=Session.OPEN,
@@ -195,7 +222,7 @@ class SimulationEngine:
                         style=spec.style,
                     ).greeks.delta
                     dte = calendar.dte(t, spec.expiry)
-                    open_qty = -intent.contracts if not is_buy else intent.contracts
+                    open_qty = -intent.qty if not is_buy else intent.qty
                     portfolio.open_option(
                         spec=spec,
                         qty=open_qty,
@@ -209,7 +236,7 @@ class SimulationEngine:
                 else:
                     portfolio.close_option(
                         spec=spec,
-                        qty=intent.contracts,
+                        qty=intent.qty,
                         price=price,
                         day=t,
                         commission=commission,
@@ -287,6 +314,15 @@ class SimulationEngine:
                     unrealized_pnl=p.unrealized_pnl,
                 )
                 for oid, p in portfolio.options.items()
+            ) + tuple(
+                PositionSnapshot(
+                    spec=EquitySpec(symbol=e.symbol),
+                    qty=e.shares,
+                    avg_price=e.avg_cost,
+                    mark_price=S_close,
+                    unrealized_pnl=(S_close - e.avg_cost) * e.shares,
+                )
+                for e in portfolio.equities.values()
             )
             states.append(
                 PortfolioState(
@@ -324,11 +360,83 @@ class SimulationEngine:
         req_per = margin.option_requirement(
             kind=kind,
             S=snap.underlier.price,
-            K=intent.option.strike,
-            premium=snap.mid(intent.option.option_id),
+            K=intent.asset.strike,
+            premium=snap.mid(intent.asset.option_id),
         )
         used = portfolio.margin_used(margin, kind, snap.underlier.price)
-        return portfolio.cash - used >= req_per * intent.contracts
+        return portfolio.cash - used >= req_per * intent.qty
+
+    def _fill_equity(
+        self,
+        *,
+        intent: OrderIntent,
+        portfolio: Portfolio,
+        margin: MarginModel,
+        kind: str,
+        open_snap,
+        fill_model: FillModel,
+        t: date,
+        order: Order,
+        orders: list[Order],
+    ) -> None:
+        """股票成交（M1-B）：OPEN = 买入（现金/保证金双重钳制股数）、CLOSE = 卖出。"""
+        spec = intent.asset
+        if not isinstance(spec, EquitySpec):
+            raise TypeError("equity fill requires EquitySpec")
+        is_buy = intent.action is OrderAction.OPEN
+        price = fill_model.equity_price(open_snap, is_buy)
+        if is_buy:
+            # 初始保证金（简化 50%；CSP 模型为 0）+ 现金双重钳制，成交价含滑点
+            req_per_share = (
+                margin.equity_requirement(value=price) / price if price > 0 else 0.0
+            )
+            used = portfolio.margin_used(margin, kind, open_snap.underlier.price)
+            by_margin = (
+                int((portfolio.cash - used) / req_per_share)
+                if req_per_share > 0
+                else intent.qty
+            )
+            by_cash = int((portfolio.cash - fill_model.order_commission()) / price)
+            shares = max(0, min(intent.qty, by_margin, by_cash))
+            if shares < 1:
+                order.status = "rejected"
+                order.reject_reason = "insufficient_cash"
+                orders.append(order)
+                return
+            commission = fill_model.equity_commission(shares)
+            portfolio.buy_equity(
+                symbol=spec.symbol, shares=shares, price=price, day=t, commission=commission
+            )
+        else:
+            held = portfolio.equities.get(spec.symbol)
+            shares = min(intent.qty, held.shares if held is not None else 0)
+            if shares < 1:
+                order.status = "rejected"
+                order.reject_reason = "insufficient_shares"
+                orders.append(order)
+                return
+            commission = fill_model.equity_commission(shares)
+            portfolio.sell_equity(
+                symbol=spec.symbol,
+                shares=shares,
+                price=price,
+                day=t,
+                commission=commission,
+                reason=intent.reason.value,
+            )
+        order.status = "filled"
+        order.fill = Fill(
+            id=order.id,
+            order_id=order.id,
+            ts=t,
+            price=price,
+            contracts=shares,
+            commission=commission,
+            slippage_bps=fill_model.slippage_bps,
+            session=Session.OPEN,
+            kind="equity",
+        )
+        orders.append(order)
 
     def _attribution(
         self,

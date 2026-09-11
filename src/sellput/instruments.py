@@ -47,6 +47,17 @@ class OptionSpec:
         return (self.expiry, self.strike, self.right)
 
 
+@dataclass(frozen=True, slots=True)
+class EquitySpec:
+    """股票（现货）规格：M1-B 多策略架构的现货订单/持仓最小描述。"""
+
+    symbol: str
+
+    @property
+    def asset_kind(self) -> str:
+        return "equity"
+
+
 OptionId = tuple[date, float, OptionRight]
 
 # 宽基指数：欧式、现金结算（M0 默认规则；其余指数后续补充）

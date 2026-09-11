@@ -1,14 +1,15 @@
 # sellput — Options Research Platform
 
-个人期权策略研究与回测平台（Phase 1：Sell Put）。规格与决策记录见
-[docs/technical-spec.md](docs/technical-spec.md)（§12 为 M0 验收标准，§13 为 M1-A 验收标准）。
+个人期权策略研究与回测平台（Phase 1：Sell Put；M1-B 起为多策略引擎）。规格与决策
+记录见 [docs/technical-spec.md](docs/technical-spec.md)（§12 为 M0 验收标准，§13 为
+M1-A 验收标准，§14 为 M1-B 多策略验收标准）。
 
 ## 目录结构
 
 ```
 src/sellput/     # 核心库（M0 垂直切片 + M1-A 真实数据接入）
 tests/           # 对拍 / 防前视 / 生命周期 / 四规则 / 复现 / 重算 / M1-A 数据层测试
-scripts/         # bench_m0.py：性能 benchmark；run_backtest.py：M1-A 一键回测；demo_m0.py：合成数据演示
+scripts/         # bench_m0.py：性能 benchmark；run_backtest.py：一键回测（M1-B 多策略）；demo_m0.py：合成数据演示；build_report.py：可视化 HTML 报告
 configs/         # 示例配置（M1-B 起使用）
 notebooks/       # 研究示例（M1-B 起使用）
 data/ runs/      # 本地缓存与实验输出（gitignore）
@@ -49,6 +50,24 @@ setx HTTP_PROXY "http://127.0.0.1:<port>"    # 重开终端后生效
 产出（`experiments/m1a/`）：`equity_curve.png`（策略净值 vs 买并持有 SPY + 回撤副图）、
 `states.csv`（每日账户状态）、`trades.csv`（每笔交易）、`prices.csv`（实际价格序列）、
 `summary.txt`。
+
+## M1-B：多策略架构（Sell Put / Buy & Hold）
+
+```bash
+# Sell Put（默认，M0 四规则）
+uv run python scripts/run_backtest.py --offline
+
+# Buy & Hold：首日全仓买入 SPY，期末最后交易日开盘清仓（分红不付现，与价格型基准口径一致）
+uv run python scripts/run_backtest.py --strategy buy_hold --offline --out experiments/m1b
+```
+
+- 多策略内核：订单（`OrderIntent.asset` 支持期权/股票）、组合（期权 FIFO + 股票 lot）、
+  引擎（期末 `on_final` 钩子）、Trade（`asset_kind`）均已泛化；Sell Put 行为与 M1-A 逐位一致。
+- trades.csv 增加 `asset_kind` / `symbol` 列（期权行数值不变）。
+- 可视化报告兼容两种策略：`uv run python scripts/build_report.py --indir experiments/m1b`
+  （生成的 report.html 双击打开，无需联网）。
+- 明确不做（M1-B）：其他策略（CC/Wheel/Spread）、Sell Put 参数配置化、analysis 指标与
+  sweep（推迟到 M1-C）。
 
 ## M0 / M1-A 范围
 

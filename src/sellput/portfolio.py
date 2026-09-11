@@ -16,7 +16,7 @@ import math
 from dataclasses import dataclass, field
 from datetime import date
 
-from .instruments import OptionId, OptionSpec
+from .instruments import EquitySpec, OptionId, OptionSpec
 from .market_data import MarketSnapshot
 from .pricing import Greeks, PricingEngine, implied_vol
 
@@ -67,14 +67,30 @@ class EquityPosition:
     shares: int
     avg_cost: float
     realized_pnl: float = 0.0
+    lots: list[EquityLot] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class EquityLot:
+    """股票开仓批次（M1-B：主动买入才有 lot；指派接货不建 lot，卖出不记 Trade）。"""
+
+    shares: int
+    price: float
+    entry_date: date
+    commission: float
 
 
 @dataclass(frozen=True, slots=True)
 class Trade:
-    """开平配对（分析单元）。qty 有符号（空头为负）。"""
+    """开平配对（分析单元）。qty 有符号（期权空头为负；股票为股数）。
+
+    M1-B 多策略：asset_kind 标识资产类别（option/equity）；spec 为期权合约或股票；
+    期权专属字段（entry_iv/exit_iv/dte_at_entry/delta_at_entry）对股票为 None。
+    """
 
     id: int
-    spec: OptionSpec
+    asset_kind: str  # "option" | "equity"
+    spec: OptionSpec | EquitySpec
     qty: int
     entry_date: date
     exit_date: date
@@ -82,18 +98,20 @@ class Trade:
     exit_price: float
     pnl: float
     commissions: float
-    exit_reason: str  # close | expire | assign | assign_cash | ...
-    entry_iv: float
-    exit_iv: float
-    dte_at_entry: int
-    delta_at_entry: float
+    exit_reason: str  # close | expire | assign | assign_cash | hold_end | ...
+    entry_iv: float | None = None
+    exit_iv: float | None = None
+    dte_at_entry: int | None = None
+    delta_at_entry: float | None = None
     model: str = ""
     iv_rank_at_entry: float | None = None  # M1 由 vol 模块填充（Spec §6）
 
 
 @dataclass(frozen=True, slots=True)
 class PositionSnapshot:
-    spec: OptionSpec
+    """持仓快照（M1-B：期权合约或股票；股票 mark=收盘价，avg_price=平均成本）。"""
+
+    spec: OptionSpec | EquitySpec
     qty: int
     avg_price: float
     mark_price: float
@@ -116,7 +134,7 @@ class PortfolioState:
 
 
 class Portfolio:
-    """账户组合：现金 + 期权仓位（FIFO lots）+ 股票仓位（指派产生）。"""
+    """账户组合：现金 + 期权仓位（FIFO lots）+ 股票仓位（指派或主动买入，M1-B）。"""
 
     def __init__(self, starting_cash: float) -> None:
         self.starting_cash = starting_cash
@@ -260,12 +278,57 @@ class Portfolio:
 
     # ---- 股票 ----
 
-    def sell_equity(
+    def buy_equity(
         self, *, symbol: str, shares: int, price: float, day: date, commission: float
+    ) -> None:
+        """买入股票（M1-B）：现金减少，合并 avg_cost，记录买入 lot 供 FIFO 配对。"""
+        self.cash -= shares * price
+        self.cash -= commission
+        eq = self.equities.get(symbol)
+        if eq is None:
+            eq = EquityPosition(symbol=symbol, shares=shares, avg_cost=price)
+            self.equities[symbol] = eq
+        else:
+            total_cost = eq.avg_cost * eq.shares + price * shares
+            eq.shares += shares
+            eq.avg_cost = total_cost / eq.shares
+        eq.lots.append(
+            EquityLot(shares=shares, price=price, entry_date=day, commission=commission)
+        )
+
+    def sell_equity(
+        self,
+        *,
+        symbol: str,
+        shares: int,
+        price: float,
+        day: date,
+        commission: float,
+        reason: str = "close",
     ) -> float:
+        """卖出股票：FIFO 配对主动买入的 lot 并记 Trade；无 lot 部分（指派接货）不记。"""
         eq = self.equities.get(symbol)
         if eq is None or eq.shares < shares:
             raise ValueError("insufficient shares")
+        remaining = shares
+        while remaining > 0 and eq.lots:
+            lot = eq.lots[0]
+            consumed = min(remaining, lot.shares)
+            frac = consumed / shares if shares else 0.0
+            lot_commission = commission * frac
+            self._record_equity_trade(
+                symbol=symbol,
+                lot=lot,
+                close_shares=consumed,
+                exit_price=price,
+                exit_date=day,
+                exit_reason=reason,
+                commission=lot_commission,
+            )
+            lot.shares -= consumed
+            remaining -= consumed
+            if lot.shares == 0:
+                eq.lots.pop(0)
         realized = (price - eq.avg_cost) * shares - commission
         self.cash += price * shares - commission
         eq.shares -= shares
@@ -407,6 +470,7 @@ class Portfolio:
         self.trades.append(
             Trade(
                 id=self._trade_seq,
+                asset_kind="option",
                 spec=spec,
                 qty=close_qty,
                 entry_date=lot.entry_date,
@@ -425,5 +489,34 @@ class Portfolio:
                 exit_iv=exit_iv,
                 dte_at_entry=lot.dte_at_entry,
                 delta_at_entry=lot.delta_at_entry,
+            )
+        )
+
+    def _record_equity_trade(
+        self,
+        *,
+        symbol: str,
+        lot: EquityLot,
+        close_shares: int,
+        exit_price: float,
+        exit_date: date,
+        exit_reason: str,
+        commission: float,
+    ) -> None:
+        """记录股票开平配对（M1-B）：PnL 扣减开仓与平仓两部分手续费（与现金账守恒）。"""
+        self._trade_seq += 1
+        self.trades.append(
+            Trade(
+                id=self._trade_seq,
+                asset_kind="equity",
+                spec=EquitySpec(symbol=symbol),
+                qty=close_shares,
+                entry_date=lot.entry_date,
+                exit_date=exit_date,
+                entry_price=lot.price,
+                exit_price=exit_price,
+                pnl=(exit_price - lot.price) * close_shares - lot.commission - commission,
+                commissions=lot.commission + commission,
+                exit_reason=exit_reason,
             )
         )

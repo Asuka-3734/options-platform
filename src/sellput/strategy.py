@@ -12,10 +12,16 @@ import numpy as np
 from pydantic import BaseModel
 from scipy.special import erf
 
-from .config import SellPutParams, SizingConfig
+from .config import BuyHoldParams, SellPutParams, SizingConfig
 from .dividend import DividendModel
 from .execution import OrderAction, OrderIntent, OrderReason
-from .instruments import OptionRight, OptionSpec, TradingCalendar, defaults_for_symbol
+from .instruments import (
+    EquitySpec,
+    OptionRight,
+    OptionSpec,
+    TradingCalendar,
+    defaults_for_symbol,
+)
 from .margin import MarginModel
 from .market_data import MarketSnapshot
 from .portfolio import Portfolio
@@ -24,17 +30,23 @@ from .pricing import PricingEngine, implied_vol
 
 @dataclass(slots=True)
 class StrategyContext:
-    """信号上下文（Spec §4.2 步骤 1）：只含 t−1 收盘快照与当前组合，禁止 t 日数据。"""
+    """信号上下文（Spec §4.2 步骤 1）：只含 t−1 收盘快照与当前组合，禁止 t 日数据。
+
+    M1-B 多策略：params 为当前策略参数；first_session/last_session 供
+    生命周期型策略（如买入持有）使用。
+    """
 
     prev_close: MarketSnapshot
     portfolio: Portfolio
     pricing: PricingEngine
     dividend_model: DividendModel
     calendar: TradingCalendar
-    params: SellPutParams
+    params: SellPutParams | BuyHoldParams
     sizing: SizingConfig
     margin_model: MarginModel
     underlier_kind: str
+    first_session: date
+    last_session: date
 
 
 class Strategy(ABC):
@@ -42,6 +54,10 @@ class Strategy(ABC):
 
     @abstractmethod
     def on_open(self, ctx: StrategyContext) -> list[OrderIntent]: ...
+
+    def on_final(self, ctx: StrategyContext) -> list[OrderIntent]:
+        """最后交易日钩子（M1-B）：无条件调用，不受保证金阻断影响；默认不操作。"""
+        return []
 
 
 class SellPutStrategy(Strategy):
@@ -164,3 +180,53 @@ class SellPutStrategy(Strategy):
         if ctx.sizing.max_contracts is not None:
             contracts = min(contracts, ctx.sizing.max_contracts)
         return max(contracts, 0)
+
+
+class BuyHoldStrategy(Strategy):
+    """M1-B：买入持有（Spec §14 / §10 M1-B）。
+
+    - 首交易日按 prev_close（t−1 收盘）定价全仓买入，取整股（成交价由引擎开盘价
+      含滑点钳制，防前视）；
+    - 中途零订单；期末最后交易日开盘清仓（经 on_final 钩子，不受保证金阻断影响）；
+    - 分红不付现（与价格型基准口径一致）；单笔 Trade（exit_reason=hold_end）。
+    """
+
+    params_schema = BuyHoldParams
+
+    def __init__(self, params: BuyHoldParams) -> None:
+        self.params = params
+
+    def on_open(self, ctx: StrategyContext) -> list[OrderIntent]:
+        # 决策日 = prev_close（t−1 收盘）的下一个交易日；仅首日开仓
+        today = ctx.calendar.next_session(ctx.prev_close.date)
+        if today != ctx.first_session:
+            return []
+        if ctx.portfolio.equities:
+            return []  # 首日已买入（幂等保护）
+        S = ctx.prev_close.underlier.price
+        if S <= 0:
+            return []
+        shares = int(ctx.portfolio.cash * self.params.allocation / S)
+        if shares < 1:
+            return []
+        return [
+            OrderIntent(
+                OrderAction.OPEN,
+                EquitySpec(symbol=ctx.prev_close.underlier.symbol),
+                shares,
+                reason=OrderReason.ENTRY,
+            )
+        ]
+
+    def on_final(self, ctx: StrategyContext) -> list[OrderIntent]:
+        eq = ctx.portfolio.equities.get(ctx.prev_close.underlier.symbol)
+        if eq is None or eq.shares <= 0:
+            return []
+        return [
+            OrderIntent(
+                OrderAction.CLOSE,
+                EquitySpec(symbol=eq.symbol),
+                eq.shares,
+                reason=OrderReason.HOLD_END,
+            )
+        ]

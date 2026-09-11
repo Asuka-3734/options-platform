@@ -1,6 +1,6 @@
 # Options Research Platform — Technical Specification
 
-> **状态**：v0.5.0 · **M0 已完成**（§12 九项验收全部通过）· **M1-A 已完成**（§13 八项验收全部通过，2005–2024 真实 SPY 首跑出曲线）；M1-B / M1-C 待确认后启动
+> **状态**：v0.6.0 · **M0 已完成**（§12 九项验收全部通过）· **M1-A 已完成**（§13 八项验收全部通过，2005–2024 真实 SPY 首跑出曲线）· **M1-B 进行中**（多策略架构：Sell Put + Buy & Hold，§14）
 > **项目代号**：`sellput`（阶段一策略为 Sell Put；平台本体面向全部期权策略）
 > **定位**：本地运行的个人期权策略研究与回测平台 —— 策略定义 → 参数配置 → 历史回测 / Monte Carlo → 分析可视化 → 实验对比。
 > **语言约定**：代码、配置、日志为英文；文档为中文。
@@ -10,6 +10,8 @@
 **v0.4 变更记录**（决策全部确认，M0 已获授权）：D6 CRR 进入 M0（标准实现、无高级 early-exercise 优化、报告标注模型）· D11 更名 Simplified Reg-T-style Margin Model（research approximation 声明）· D12 SPX 结算明确为 M0 简化模型 · 性能数值定性为 benchmark target（非 correctness gate）· §8 里程碑重构（M0 扩展为垂直切片 + 正确性闸门）· 新增 §12 M0 Acceptance Criteria · §4.1 落实最小可用模型原则。
 
 **v0.5 变更记录**（M1-A 已获授权并完成）：M1 拆分为 M1-A（真实标的日线接入 + 首条收益曲线）/ M1-B（指标、CLI、sweep）/ M1-C（报告增强）· 新增 HybridProvider（真实价格 + 合成链，20 日滚动已实现波动率驱动）· 数据三级获取（缓存 → yfinance → 手动 CSV 兜底）· 按日股息率（真实分红折算，PerDayDividendModel）· 新增 §13 M1-A Acceptance Criteria。
+
+**v0.6 变更记录**（M1-B 已获授权，进行中）：M1-B 重定义为**多策略架构**（Sell Put + Buy & Hold，通用回测引擎）——原 M1-B 内容（analysis 指标、CLI 参数化、sweep + train/test 纪律）推迟为 M1-C；报告增强已提前交付（experiments/m1a/report.html）· 订单模型泛化（`OrderIntent.asset: OptionSpec | EquitySpec`）· Trade 泛化（`asset_kind` + 期权专属字段可空）· `BuyHoldStrategy`（全仓买入持有、期末开盘清仓、分红不付现）· `Strategy.on_final` 期末钩子 · CLI `--strategy` · 新增 §14 M1-B Acceptance Criteria。
 
 ---
 
@@ -615,7 +617,7 @@ monte_carlo: null               # M3
 | 里程碑 | 交付物 | 验收点 |
 |---|---|---|
 | **M0 垂直切片与正确性闸门（本阶段）** | 仓库骨架（uv/pyproject/ruff/pytest）；config；Raw/Derived 数据契约 + `SyntheticProvider`；核心对象（§4.1，最小可用模型）；`pricing`：`PricingEngine` ABC + BS + CRR（标准实现、无高级优化）+ 解析 Greeks + IV 求解；`DividendModel` ABC + 连续 q；`instruments` + 交易日历；`execution`（FillModel/滑点/手续费）；`portfolio`（Cash/Position/PnL/归因）；`margin`（Simplified Reg-T-style + CSP）；`sim`（日频事件循环：到期/指派/保证金，§4.2）；`SellPutStrategy`（§5 四规则）；`mc` 最小路径生成器（seeded GBM）；benchmark 脚本 | **§12 M0 Acceptance Criteria 全部通过** |
-| **M1 历史回测全链路**（M1-A ✅ / M1-B / M1-C） | M1-A：yfinance 真实标的日线 + 本地缓存 + 手动 CSV 兜底；HybridProvider（合成链波动率 = 20 日滚动已实现波动率）；按日股息率；`run_backtest.py` 一键回测 + 收益曲线图。M1-B：`analysis`（§6 全部指标，含 IV Rank/IVP/RV + 分桶，`Trade.iv_rank_at_entry` 填充）；CLI `sellput run` / `sellput compare`；sweep + train/test 纪律（D14）。M1-C：report 增强 | M1-A ✅（2005–2024 SPY 首跑出曲线）；M1-B/C：SPY 与 SPX 真实数据回测出报告；10 年回测 <10s（benchmark）；sweep 对比表（仅 train 排序）可用 |
+| **M1 历史回测全链路**（M1-A ✅ / M1-B 进行中 / M1-C 推迟） | M1-A：yfinance 真实标的日线 + 本地缓存 + 手动 CSV 兜底；HybridProvider（合成链波动率 = 20 日滚动已实现波动率）；按日股息率；`run_backtest.py` 一键回测 + 收益曲线图。M1-B：多策略架构——订单/Trade/组合/引擎泛化 + `BuyHoldStrategy` + CLI `--strategy`（§14 验收）。M1-C（推迟）：`analysis`（§6 全部指标，含 IV Rank/IVP/RV + 分桶，`Trade.iv_rank_at_entry` 填充）；CLI 参数化；sweep + train/test 纪律（D14）；报告增强已提前交付 | M1-A ✅（2005–2024 SPY 首跑出曲线）；M1-B：§14 八项验收（Sell Put 逐位回归 + Buy & Hold 全链路）；10 年回测 <10s（benchmark） |
 | **M2 真实期权数据与策略增强** | 真实期权链 Provider（按 D4 决策）；IV 抽取与 `FittedSkewSurface`；CSV 导入；**Stop Loss / Roll** 策略增强；HTML 报告完整化 | 真实链回测口径与数据源文档一致；SL/Roll 金标准测试通过 |
 | **M3 Monte Carlo** | 完整 `mc` 引擎：跨路径向量化执行、IV 曲面定价、分布统计与图表 | MC sanity check（附录 C.4）通过；1000×252 <5 分钟（benchmark）；VaR/指派率/回撤分布报告可用 |
 | **M4（预留）** | Covered Call → Wheel → Put Spread；SVI 曲面；离散分红 `DiscreteDividendModel`；可选 Streamlit UI；可选盘中数据 | 逐项单独立项 |
@@ -666,12 +668,22 @@ monte_carlo: null               # M3
 | M1-A 回测区间 | ✅ 已确认 | 默认 2005-01-01 ~ 2024-12-31（约 20 年） |
 | M1-A 网络诊断 | ✅ 已记录 | Yahoo 直连被 429 限流（数据中心出口 IP）；Python 默认不走系统代理（本地代理软件监听 127.0.0.1）；设 HTTPS_PROXY/HTTP_PROXY 环境变量后 yfinance 正常 |
 | M1-A 实现修正 | ✅ 已记录 | ① 开盘快照锚点只用开盘价与前收（原含当日收盘=前视）② 成交反解 IV 用快照自身 q（除息日深实值下界误报）③ implied_vol 下界加 1e-9 浮点容差（真实低波动行情的 erf 尾部饱和） |
+| M1-B 范围重定义 | ✅ 已确认 | M1-B = 多策略架构（通用回测引擎）；仅 Sell Put + Buy & Hold 两种策略；暂不实现其他策略、不做 Sell Put 参数配置化；原 M1-B 内容（analysis 指标 / CLI 参数化 / sweep + train/test）推迟为 M1-C |
+| M1-B 订单模型 | ✅ 已确认 | `OrderIntent.asset: OptionSpec \| EquitySpec`（EquitySpec = 标的 symbol）；OPEN = 买入股票/开期权，CLOSE = 卖出股票/平期权 |
+| M1-B Buy & Hold 语义 | ✅ 已确认 | 首交易日开盘全仓买入（allocation 默认 100%，取整股）；期末最后交易日开盘清仓（引擎统一开盘成交）；单笔 Trade（exit_reason=hold_end）；**分红不付现**（与价格型基准口径一致，总回报版留待后续）；股票手续费 = 每单 + 每股 × 0（每股费率配置位已加，默认 0） |
+| M1-B 期末清仓钩子 | ✅ 已确认 | `Strategy.on_final(ctx)`：最后交易日无条件调用（不受 margin_blocked 影响）；SellPutStrategy 用默认空实现（M0 行为不变） |
+| M1-B Trade 泛化 | ✅ 已确认 | `Trade.spec: OptionSpec \| EquitySpec` + `asset_kind` 字段；期权专属字段（entry_iv/exit_iv/dte_at_entry/delta_at_entry）对股票为 None；trades.csv 增加 asset_kind/symbol 列（期权行数值不变） |
+| M1-B 股票会计 | ✅ 已确认 | 组合新增 buy_equity + EquityLot（FIFO）；买入按成交价并入 avg_cost；卖出配对记 Trade；指派产生的无 lot 股票卖出仍不记 Trade（M0 行为不变）；states.positions 增加股票快照（mark=收盘价，unrealized=(S−avg_cost)×股数）；Greeks/归因仍仅期权域（股票 PnL 走净值曲线，扩展留待后续） |
+| M1-B 股票保证金口径 | ✅ 已确认 | 买入时按 50% 初始保证金（CSP 模型为 0）检查可用资金并钳制股数；持仓日 margin_used 按 50% 市值计入（与 M0 口径一致）；100% 现金买入后 margin_blocked 属预期现象，期末清仓经 on_final 钩子不受影响 |
+| M1-B 回归闸门 | ✅ 已确认 | Sell Put 全链路逐位不变（M1-A 离线复跑：期末 173,061.18 / 529 笔 / 最大回撤 −85.05%）；既有 80 项测试全绿 |
 
 ---
 
 ## 11. 决策问答记录（已闭环）
 
 v0.4 全部待决策问题已答复并写入 §10 决策记录：CRR 进 M0 · 对象模型最小可用原则 · IV Rank/RV 默认值与分桶 · SPX 结算简化 · 保证金命名与声明 · 性能 benchmark 定性 · 其余推荐项整体通过。**当前无待决策项**，M0 已获授权开始。
+
+**v0.6（M1-B）**：用户直接下达 M1-B 范围（多策略架构；仅 Sell Put + Buy & Hold；暂不做参数配置化与其他策略）；上述 §10 中 M1-B 各行决策均依此授权记录，无待确认项。
 
 ---
 
@@ -711,6 +723,25 @@ M0 完成后，以下每一条都必须有对应测试或脚本证据并通过�
 | 8 | 既有回归不回退 | 80 功能测试全绿；10 年合成 benchmark 7.97s < 10s；终值 44,640.09 不变 ✅ |
 
 **首跑数字（研究近似，期权报价为合成）**：期末净值 173,061（+73.1%），买并持有 SPY +387.2%；最大回撤 **−85.0%**（2008-10-10，无止损裸空 Put 的尾部风险画像）；胜率 93.2%，离场：止盈 488 / DTE≤3 强退 41。
+
+---
+
+## 14. M1-B Acceptance Criteria（多策略架构：Sell Put + Buy & Hold）
+
+M1-B 完成后，以下每一条都必须有对应测试或脚本证据并通过：
+
+| # | 验收项 | 通过条件 |
+|---|---|---|
+| 1 | 通用订单与成交 | OrderIntent 支持 OptionSpec 与 EquitySpec；股票 OPEN/CLOSE 全链路成交（滑点/手续费/保证金钳制）；Sell Put 路径行为不变 |
+| 2 | Buy & Hold 生命周期 | 首交易日开盘买入、最后交易日开盘清仓、中途零订单；单笔 Trade（asset_kind=equity，exit_reason=hold_end，qty=股数） |
+| 3 | Buy & Hold 会计守恒 | 清仓后 equity = start + Σpnl 逐位相等；持仓日 states.positions 含股票快照（mark/unrealized 正确）；margin_used = 50% 市值口径 |
+| 4 | 防前视 | B&H 股数基于 t−1 收盘定价、开盘成交价钳制（含滑点/手续费）；篡改开盘价不改变策略意图 |
+| 5 | 期末清仓与保证金解耦 | 100% 现金买入后 margin_blocked 不阻止期末清仓（on_final 钩子）；reject/liquidate 政策下 B&H 均能正常清仓 |
+| 6 | 配置与工厂 | type/params 不匹配时校验拒绝；build_strategy 正确分发；CLI `--strategy {sell_put,buy_hold}` |
+| 7 | 回归闸门 | 既有 80 项测试全绿；M1-A 离线复跑逐位一致（期末 173,061.18 / 529 笔 / 最大回撤 −85.05%）；10 年合成 benchmark 终值 44,640.09 不变 |
+| 8 | 交付体验 | trades.csv 兼容扩展（asset_kind/symbol，期权行数值不变）；summary.txt 记录 strategy；可视化报告兼容两种策略（时间线/直方图正确渲染股票交易） |
+
+**M1-B 明确不做**：其他策略（Covered Call / Put Spread / Wheel，M4 沿本架构立项）；Sell Put 参数配置化；analysis 指标（IV Rank/IVP/RV + 分桶）；sweep + train/test；股票分红付现；股票腿 Greeks/归因。
 
 ---
 
@@ -799,4 +830,4 @@ d1' = [ln(S0/K) + (μ + σ²/2)T]/(σ√T)， d2' = d1' − σ√T
 
 ---
 
-*（本文档 v0.5.0 —— M0 与 M1-A 已完成；§10 决策记录为唯一事实来源，§12 为 M0 完成闸门（已通过），§13 为 M1-A 完成闸门（已通过）。M1-B / M1-C 待用户确认后启动。）*
+*（本文档 v0.6.0 —— M0 与 M1-A 已完成；M1-B（多策略架构，§14）进行中。§10 决策记录为唯一事实来源，§12/§13 为 M0/M1-A 完成闸门（已通过）。）*

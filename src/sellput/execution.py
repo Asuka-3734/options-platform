@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import date
 from enum import Enum
 
-from .instruments import OptionSpec
+from .instruments import EquitySpec, OptionSpec
 from .market_data import MarketSnapshot, Session
 
 
@@ -27,15 +27,20 @@ class OrderReason(Enum):
     FORCE_LIQUIDATION = "force_liquidation"
     ROLL = "roll"  # M2 预留
     STOP_LOSS = "stop_loss"  # M2 预留
+    HOLD_END = "hold_end"  # M1-B：买入持有期末清仓
 
 
 @dataclass(frozen=True, slots=True)
 class OrderIntent:
-    """策略输出（无副作用）。"""
+    """策略输出（无副作用）。M1-B 多策略：asset 为期权合约或股票现货。
+
+    action：OPEN = 开期权 / 买入股票；CLOSE = 平期权 / 卖出股票。
+    qty：期权 = 合约数；股票 = 股数。
+    """
 
     action: OrderAction
-    option: OptionSpec
-    contracts: int
+    asset: OptionSpec | EquitySpec
+    qty: int
     limit: float | None = None
     reason: OrderReason = OrderReason.ENTRY
 
@@ -81,10 +86,12 @@ class FillModel:
         slippage_bps: float = 5.0,
         commission_per_contract: float = 0.65,
         commission_per_order: float = 1.0,
+        commission_per_share: float = 0.0,
     ) -> None:
         self.slippage_bps = slippage_bps
         self.commission_per_contract = commission_per_contract
         self.commission_per_order = commission_per_order
+        self.commission_per_share = commission_per_share
 
     def option_price(self, snapshot: MarketSnapshot, spec: OptionSpec, is_buy: bool) -> float:
         mid = snapshot.mid(spec.option_id)
@@ -98,6 +105,10 @@ class FillModel:
 
     def commission(self, contracts: int) -> float:
         return self.commission_per_order + self.commission_per_contract * contracts
+
+    def equity_commission(self, shares: int) -> float:
+        """股票成交手续费：每单 + 每股 × commission_per_share（默认 0，M1-B）。"""
+        return self.commission_per_order + self.commission_per_share * shares
 
     def order_commission(self) -> float:
         return self.commission_per_order

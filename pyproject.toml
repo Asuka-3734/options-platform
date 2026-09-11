@@ -1,7 +1,7 @@
 [project]
 name = "sellput"
-version = "0.2.0"
-description = "Options Research Platform - sell put & beyond (M0 + M1-A)"
+version = "0.3.0"
+description = "Options Research Platform - multi-strategy backtest engine (M0 + M1-A + M1-B)"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

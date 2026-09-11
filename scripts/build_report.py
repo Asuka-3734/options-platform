@@ -17,10 +17,16 @@ from pathlib import Path
 
 START_CASH = 100_000.0
 
-# 与 run_backtest.py 的 REASON_ZH 保持一致
+# 与 run_backtest.py 的 REASON_ZH 保持一致；color 供时间线/直方图着色
 REASON_ZH = {
     "take_profit": "止盈 50%",
     "dte_exit": "DTE ≤ 3 强退",
+    "hold_end": "持有到期清仓",
+}
+REASON_COLOR = {
+    "take_profit": "#16a34a",
+    "dte_exit": "#f97316",
+    "hold_end": "#0ea5e9",
 }
 
 # 背景标注的历史市场阶段（仅作阴影标注，非策略信号）
@@ -58,24 +64,40 @@ def load_states(path: Path) -> tuple[list[str], list[float], list[float], list[f
     return dates, eq, bench, pos
 
 
+def _opt_float(s: str) -> float | None:
+    s = s.strip()
+    return float(s) if s else None
+
+
+def safe_mean(xs: list[float]) -> float:
+    return sum(xs) / len(xs) if xs else 0.0
+
+
 def load_trades(path: Path) -> list[dict]:
     trades: list[dict] = []
     with path.open(newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
             entry = row["entry_date"]
             exit_ = row["exit_date"]
+            asset_kind = row.get("asset_kind") or "option"
             trades.append(
                 {
                     "id": int(row["id"]),
-                    "strike": float(row["strike"]),
-                    "expiry": row["expiry"],
+                    "asset_kind": asset_kind,
+                    "symbol": row.get("symbol") or None,
+                    "strike": _opt_float(row["strike"]) if row.get("strike") else None,
+                    "expiry": row.get("expiry") or None,
                     "qty": int(round(abs(float(row["qty"])))),
                     "entry_date": entry,
                     "exit_date": exit_,
                     "pnl": round(float(row["pnl"]), 2),
                     "exit_reason": row["exit_reason"],
-                    "entry_iv": round(float(row["entry_iv"]), 4),
-                    "delta_at_entry": round(float(row["delta_at_entry"]), 3),
+                    "entry_iv": _opt_float(row["entry_iv"]) if row.get("entry_iv") else None,
+                    "delta_at_entry": (
+                        _opt_float(row["delta_at_entry"])
+                        if row.get("delta_at_entry")
+                        else None
+                    ),
                     "hold": (date.fromisoformat(exit_) - date.fromisoformat(entry)).days,
                 }
             )
@@ -106,13 +128,20 @@ def drawdowns(values: list[float]) -> list[float]:
 def histogram(pnls: list[float]) -> list[dict]:
     bins = [{"lo": lo, "hi": lo + 500, "n": 0} for lo in range(-10_000, 10_000, 500)]
     overflow = 0
+    hi_overflow = 0
     for p in pnls:
         if p <= -10_000:
             overflow += 1
+        elif p >= 10_000:
+            hi_overflow += 1
         else:
             idx = min(int((p + 10_000) // 500), len(bins) - 1)
             bins[idx]["n"] += 1
-    return [{"overflow": True, "n": overflow}] + bins
+    return (
+        [{"overflow": True, "n": overflow}]
+        + bins
+        + [{"hi_overflow": True, "n": hi_overflow}]
+    )
 
 
 def read_summary(path: Path) -> dict[str, str]:
@@ -146,21 +175,25 @@ def main(argv: list[str] | None = None) -> int:
     dates, eq, bench, pos = load_states(states_path)
     trades = load_trades(trades_path)
     pdates, pcloses = load_prices(prices_path, dates[0], dates[-1])
+    summary = read_summary(indir / "summary.txt")
+    strategy_type = summary.get("strategy", "sell_put")
+    bh = strategy_type == "buy_hold"
     n = len(trades)
     pnls = [t["pnl"] for t in trades]
     wins = [p for p in pnls if p > 0]
     losses = [p for p in pnls if p < 0]
-    win_rate = len(wins) / n
+    win_rate = len(wins) / n if n else 0.0
     total_pnl = sum(pnls)
-    median_pnl = sorted(pnls)[n // 2]
-    worst = min(trades, key=lambda t: t["pnl"])
-    best = max(trades, key=lambda t: t["pnl"])
-    avg_hold = sum(t["hold"] for t in trades) / n
+    median_pnl = sorted(pnls)[n // 2] if n else 0.0
+    worst = min(trades, key=lambda t: t["pnl"]) if trades else None
+    best = max(trades, key=lambda t: t["pnl"]) if trades else None
+    avg_hold = sum(t["hold"] for t in trades) / n if n else 0.0
     by_reason: dict[str, int] = {}
     for t in trades:
         by_reason[t["exit_reason"]] = by_reason.get(t["exit_reason"], 0) + 1
     n_tp = by_reason.get("take_profit", 0)
     n_dte = by_reason.get("dte_exit", 0)
+    n_he = by_reason.get("hold_end", 0)
     tp_pnls = [t["pnl"] for t in trades if t["exit_reason"] == "take_profit"]
     dte_pnls = [t["pnl"] for t in trades if t["exit_reason"] == "dte_exit"]
 
@@ -208,9 +241,9 @@ def main(argv: list[str] | None = None) -> int:
 
     bins = histogram(pnls)
     n_over = bins[0]["n"]
+    n_over_hi = bins[-1]["n"]
 
     # ---- 与 summary.txt 交叉核对（只报告，不纠正）----
-    summary = read_summary(indir / "summary.txt")
     checks = {
         "final_equity": eq[-1],
         "trades": n,
@@ -223,30 +256,69 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[不一致] {key}: summary.txt={want} 报告={actual}")
 
     # ---- HTML 内容 ----
-    title = "Sell Put 策略 · M1-A 回测报告（2005–2024）"
+    strat_zh = "Buy & Hold" if bh else "Sell Put"
+    title = f"{strat_zh} 策略 · M1-B 回测报告（2005–2024）"
     sub = (
         f"标的 SPY · 真实日线 + 合成期权报价（研究近似）· {len(dates)} 个交易日 · "
-        "由 experiments/m1a 的 CSV 重新计算绘制，未改动任何回测逻辑"
+        f"策略 {strategy_type} · 由 experiments/m1a 的 CSV 重新计算绘制，未改动任何回测逻辑"
     )
+    if bh:
+        g1 = (
+            f"<li>先看第 1 张图定结论：策略 20 年 {fmt_pct(total_return)}，买并持有基准 "
+            f"{fmt_pct(bench_return)}——两者几乎重合，差异只剩手续费与滑点。</li>"
+        )
+        g2 = (
+            f"<li>再看第 2 张图看风险：最大回撤 {dd_min:.1%}（{dd_min_date}）——"
+            "买入持有与标的同涨同跌，回撤没有放大。</li>"
+        )
+        g3 = (
+            "<li>最后看第 4、5 张图找原因：只有一笔交易、一条时间线——"
+            "这是对引擎多资产路径的正确性自检。</li>"
+        )
+    else:
+        g1 = (
+            f"<li>先看第 1 张图定结论：策略 20 年 {fmt_pct(total_return)}，买并持有 "
+            f"{fmt_pct(bench_return)}——策略大幅跑输基准。</li>"
+        )
+        g2 = (
+            f"<li>再看第 2 张图看风险：最大回撤 {dd_min:.1%}（{dd_min_date}）——"
+            "无止损裸卖 Put 有清盘级风险。</li>"
+        )
+        g3 = (
+            "<li>最后看第 4、5 张图找原因：收益靠大量小额止盈堆出来，"
+            "亏损集中在 2008/2020 少数巨亏笔。</li>"
+        )
     guide = (
         "<h2>3 分钟怎么读这份报告</h2><ol>"
-        f"<li>先看第 1 张图定结论：策略 20 年 {fmt_pct(total_return)}，买并持有 "
-        f"{fmt_pct(bench_return)}——策略大幅跑输基准。</li>"
-        f"<li>再看第 2 张图看风险：最大回撤 {dd_min:.1%}（{dd_min_date}）——"
-        "无止损裸卖 Put 有清盘级风险。</li>"
-        "<li>最后看第 4、5 张图找原因：收益靠大量小额止盈堆出来，亏损集中在 "
-        "2008/2020 少数巨亏笔。</li>"
-        "<li>灰底阴影 = 三段历史熊市背景（2008 金融危机 / 2020 COVID / 2022 加息）；"
+        + g1
+        + g2
+        + g3
+        + "<li>灰底阴影 = 三段历史熊市背景（2008 金融危机 / 2020 COVID / 2022 加息）；"
         "鼠标悬停任意曲线看每日数值，悬停时间线上的线看单笔明细。</li>"
         "</ol>"
     )
+    exit_bits: list[str] = []
+    if n_tp:
+        exit_bits.append(f"止盈 {n_tp}")
+    if n_dte:
+        exit_bits.append(f"强退 {n_dte}")
+    if n_he:
+        exit_bits.append(f"持有到期 {n_he}")
     cards = [
         ("期末净值", fmt_money(eq[-1]), f"20 年总收益 {fmt_pct(total_return)}"),
         ("买并持有 SPY", fmt_money(bh_final), f"同期 {fmt_pct(bench_return)}"),
         ("最大回撤", f"{dd_min:.1%}", dd_min_date),
         ("交易", f"{n} 笔 · 胜率 {win_rate:.1%}", f"平均持有 {avg_hold:.0f} 天"),
-        ("离场构成", f"止盈 {n_tp} · 强退 {n_dte}", "无止损 · 无滚仓"),
-        ("单笔最差", fmt_money(worst["pnl"]), worst["exit_date"]),
+        (
+            "离场构成",
+            " · ".join(exit_bits) or "—",
+            "无止损 · 无滚仓" if strategy_type == "sell_put" else "一次买入 · 期末清仓",
+        ),
+        (
+            "单笔最差",
+            fmt_money(worst["pnl"]) if worst else "—",
+            worst["exit_date"] if worst else "—",
+        ),
     ]
     cards_html = "".join(
         f'<div class="card"><div class="k">{k}</div><div class="v">{v}</div>'
@@ -269,28 +341,51 @@ def main(argv: list[str] | None = None) -> int:
         "按开仓日期从上到下排列。悬停看单笔明细。"
     )
 
-    ex1 = explain(
-        [
-            "这张图是什么：假设 2005 年初投入 $100,000——蓝线是按策略滚动卖 Put 的"
-            "账户总资产，橙线是同一笔钱直接买 SPY 持有不动。",
-            "该观察什么：两条线谁高谁低；蓝线在三段灰底熊市里跌得有多狠、"
-            "之后用几年才爬回前高。",
-            f"说明了什么：策略 20 年总收益 {fmt_pct(total_return)}，买并持有 "
-            f"{fmt_pct(bench_return)}——策略只赚到基准的约 {total_return / bench_return:.0%}。"
-            "卖 Put 赚的是平静期的保费，却在两次危机里把多年利润一次性赔掉，"
-            "收益与风险完全不对等。",
-        ]
-    )
+    if bh:
+        ex1 = explain(
+            [
+                "这张图是什么：假设 2005 年初投入 $100,000——蓝线是首日全仓买入 SPY 并"
+                "持有到期末的账户总资产，橙线是价格型基准（同样 $100,000 买 SPY 的价格比，"
+                "不含分红再投资）。",
+                "该观察什么：两条线是否几乎重合；蓝线比橙线略低的幅度（= 手续费 + 滑点）。",
+                f"说明了什么：策略 20 年 {fmt_pct(total_return)} vs 基准 "
+                f"{fmt_pct(bench_return)}——差异极小，说明引擎的股票买入、逐日盯市、"
+                "期末清仓路径记账正确。",
+            ]
+        )
+    else:
+        ex1 = explain(
+            [
+                "这张图是什么：假设 2005 年初投入 $100,000——蓝线是按策略滚动卖 Put 的"
+                "账户总资产，橙线是同一笔钱直接买 SPY 持有不动。",
+                "该观察什么：两条线谁高谁低；蓝线在三段灰底熊市里跌得有多狠、"
+                "之后用几年才爬回前高。",
+                f"说明了什么：策略 20 年总收益 {fmt_pct(total_return)}，买并持有 "
+                f"{fmt_pct(bench_return)}——策略只赚到基准的约 {total_return / bench_return:.0%}。"
+                "卖 Put 赚的是平静期的保费，却在两次危机里把多年利润一次性赔掉，"
+                "收益与风险完全不对等。",
+            ]
+        )
+    if bh:
+        ex2_third = (
+            f"说明了什么：策略最大回撤 {dd_min:.1%}（{dd_min_date}）与 SPY 自身 "
+            f"{bench_dd_min:.1%} 基本一致——买入持有只是把市场的风险原样接过来，"
+            "没有额外放大。"
+        )
+    else:
+        ex2_third = (
+            f"说明了什么：2008 年最深 {dd_min:.1%}（{dd_min_date}），2020 年又跌过半；"
+            f"SPY 自身最深也才 {bench_dd_min:.1%}（{bench_dd_min_date}），策略回撤是它的 "
+            f"{dd_min / bench_dd_min:.1f} 倍——裸卖 Put 不仅不避险，反而放大了下行，"
+            "而且规则里没有任何止损保护。"
+        )
     ex2 = explain(
         [
             "这张图是什么：账户从历史最高点回落的幅度，跌得越深离\u2018清零\u2019越近；"
             "红线=策略，灰线=SPY 自身回撤作对照。",
             "该观察什么：红点标出的坑底时间与深度；两个大坑之间隔了几年、爬回去用了多久；"
             "红线和灰线的差距（策略是否比市场跌得更深）。",
-            f"说明了什么：2008 年最深 {dd_min:.1%}（{dd_min_date}），2020 年又跌过半；"
-            f"SPY 自身最深也才 {bench_dd_min:.1%}（{bench_dd_min_date}），策略回撤是它的 "
-            f"{dd_min / bench_dd_min:.1f} 倍——裸卖 Put 不仅不避险，反而放大了下行，"
-            "而且规则里没有任何止损保护。",
+            ex2_third,
         ]
     )
     ex3 = explain(
@@ -310,17 +405,25 @@ def main(argv: list[str] | None = None) -> int:
             f"期末仍持有未平仓合约（市值 {fmt_money(pos[-1])}），"
             "所以净值 ≠ 起始资金 + 已实现 PnL 合计。"
         )
+    worst_bits = ""
+    if worst is not None and best is not None:
+        worst_bits = (
+            f"——最惨一笔（{worst['exit_date']}）亏 {fmt_money(worst['pnl'])}，"
+            f"最好一笔（{best['exit_date']}）赚 {fmt_money(best['pnl'])}，"
+            "单笔盈亏严重不对称。"
+        )
     ex4 = explain(
         [
             f"这张图是什么：{n} 笔交易每笔最终盈亏的直方图；绿柱=盈利，红柱=亏损，"
-            f"最左灰柱把 ≤ −$10,000 的大亏合并（共 {n_over} 笔）。",
+            f"最左灰柱把 ≤ −$10,000 的大亏合并（共 {n_over} 笔），"
+            f"最右绿柱把 ≥ +$10,000 的大赚合并（共 {n_over_hi} 笔）。",
             f"该观察什么：柱子是不是\u2018大量小绿柱 + 少量深红柱\u2019；"
-            f"均值 {fmt_money(total_pnl / n)} 与中位数 {fmt_money(median_pnl)} 差多少。",
+            f"均值 {fmt_money(total_pnl / n)} 与中位数 {fmt_money(median_pnl)} 差多少。"
+            if n
+            else "该观察什么：（本回测没有成交）",
             f"说明了什么：胜率 {win_rate:.1%}（{len(wins)} 笔盈利，平均 "
-            f"{fmt_money(sum(wins) / len(wins))}），但 {len(losses)} 笔亏损平均 "
-            f"{fmt_money(sum(losses) / len(losses))}——最惨一笔（{worst['exit_date']}）亏 "
-            f"{fmt_money(worst['pnl'])}，最好一笔（{best['exit_date']}）赚 "
-            f"{fmt_money(best['pnl'])}，单笔盈亏严重不对称。20 年已实现 PnL 合计 "
+            f"{fmt_money(safe_mean(wins))}），但 {len(losses)} 笔亏损平均 "
+            f"{fmt_money(safe_mean(losses))}{worst_bits}。20 年已实现 PnL 合计 "
             f"{fmt_money(total_pnl)}。{final_pos_note}",
         ]
     )
@@ -328,33 +431,58 @@ def main(argv: list[str] | None = None) -> int:
         f"{ps['name']} 阶段 {ps['dte']} 笔强退、{ps['big']} 笔亏损超 $5,000"
         for ps in phase_stats
     ]
-    ex5 = explain(
-        [
-            "这张图是什么：每笔交易一条横线——左端深色圆点=开仓日，线长=持有期，"
-            "颜色=离场方式（绿=止盈 50%，橙=DTE≤3 强退）；按开仓日期从上到下排列。",
-            "该观察什么：三段灰底熊市里线条是否变密、橙色是否成串出现；"
-            "平静年份是否以短绿线为主。",
-            f"说明了什么：{n_tp} 笔止盈平均 {fmt_money(sum(tp_pnls) / len(tp_pnls))}，"
-            f"靠小赢积累；{n_dte} 笔强退平均 {fmt_money(sum(dte_pnls) / len(dte_pnls))}，"
-            f"集中在危机期——{'；'.join(phase_bits)}。危机来临时止盈规则等不到、"
-            "被迫强退接盘，这正是 M2 止损/滚仓要解决的问题。",
-        ]
-    )
+    reason_bits = []
+    if n_tp:
+        reason_bits.append(f"{n_tp} 笔止盈平均 {fmt_money(safe_mean(tp_pnls))}")
+    if n_dte:
+        reason_bits.append(f"{n_dte} 笔强退平均 {fmt_money(safe_mean(dte_pnls))}")
+    if n_he:
+        reason_bits.append(f"{n_he} 笔持有到期清仓")
+    reason_text = "，".join(reason_bits) if reason_bits else "无离场记录"
+    if bh:
+        ex5 = explain(
+            [
+                "这张图是什么：买入持有只有一笔交易——一条从首日到期末的横线"
+                "（蓝色 = 持有到期清仓）。",
+                "该观察什么：横线跨越整个回测区间，中间没有任何开平仓动作。",
+                f"说明了什么：{reason_text}；这条线就是对\u2018首日买入、期末清仓\u2019"
+                "语义的直接可视化。",
+            ]
+        )
+    else:
+        ex5 = explain(
+            [
+                "这张图是什么：每笔交易一条横线——左端深色圆点=开仓日，线长=持有期，"
+                "颜色=离场方式（绿=止盈 50%，橙=DTE≤3 强退）；按开仓日期从上到下排列。",
+                "该观察什么：三段灰底熊市里线条是否变密、橙色是否成串出现；"
+                "平静年份是否以短绿线为主。",
+                f"说明了什么：{reason_text}，"
+                f"集中在危机期——{'；'.join(phase_bits)}。危机来临时止盈规则等不到、"
+                "被迫强退接盘，这正是 M2 止损/滚仓要解决的问题。",
+            ]
+        )
 
+    strategy_rule = (
+        "<li>策略规则：滚动卖约 30 DTE、Δ≈0.20 的虚值 Put；浮盈达 50% 止盈；"
+        "DTE ≤ 3 强退；无止损、无滚仓（M2 再议）。</li>"
+        if strategy_type == "sell_put"
+        else "<li>策略规则：首交易日开盘全仓买入 SPY（取整股，含滑点与手续费）；"
+        "期末最后交易日开盘清仓；分红不付现；中途零订单。</li>"
+    )
     footer = (
         "<h3>数据与口径</h3><ul>"
         f"<li>数据来源：experiments/m1a/ 下 summary.txt / states.csv / trades.csv / "
-        f"prices.csv（seed=42，{dates[0]} ~ {dates[-1]}，{len(dates)} 个交易日）。"
+        f"prices.csv（seed=42，{dates[0]} ~ {dates[-1]}，{len(dates)} 个交易日，"
+        f"策略 {strategy_type}）。"
         "本报告只读取这些 CSV 重新计算绘制，未重跑回测引擎、未改动任何回测逻辑。</li>"
         "<li>期权报价为合成报价（Black-Scholes；波动率 = SPY 20 日滚动已实现波动率，"
         "股息率 = 近 12 个月真实分红）——不是真实历史期权链，所有数字都是研究近似；"
         "真实期权链在 M2 接入。</li>"
         "<li>买并持有基准 = 期末收盘价 ÷ 期初收盘价，不含分红再投资（实际会略高）。</li>"
         "<li>账户假设：起始 $100,000；简化 Reg-T 保证金；每笔 PnL 含双边佣金；"
-        "仓位上限 50%。</li>"
-        "<li>策略规则：滚动卖约 30 DTE、Δ≈0.20 的虚值 Put；浮盈达 50% 止盈；"
-        "DTE ≤ 3 强退；无止损、无滚仓（M2 再议）。</li>"
-        "<li>重新生成：uv run python scripts/build_report.py（在 options-platform 目录下）。"
+        "仓位上限 50%（仅 Sell Put 适用）。</li>"
+        + strategy_rule
+        + "<li>重新生成：uv run python scripts/build_report.py（在 options-platform 目录下）。"
         "</li><li>打开方式：双击 report.html 用浏览器打开即可，无需联网。</li></ul>"
     )
 
@@ -394,7 +522,7 @@ def main(argv: list[str] | None = None) -> int:
                     "prices": {"t": pdates, "c": pcloses},
                     "trades": trades,
                     "reasons": [
-                        {"key": k, "label": v}
+                        {"key": k, "label": v, "color": REASON_COLOR.get(k, "#6b7280")}
                         for k, v in REASON_ZH.items()
                     ],
                     "dd_annotations": annotations,
