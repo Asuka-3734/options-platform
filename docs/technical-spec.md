@@ -1,6 +1,6 @@
 # Options Research Platform — Technical Specification
 
-> **状态**：v0.6.0 · **M0 已完成**（§12 九项验收全部通过）· **M1-A 已完成**（§13 八项验收全部通过，2005–2024 真实 SPY 首跑出曲线）· **M1-B 进行中**（多策略架构：Sell Put + Buy & Hold，§14）
+> **状态**：v0.7.0 · **M0 已完成**（§12 九项验收全部通过）· **M1-A 已完成**（§13 八项验收全部通过，2005–2024 真实 SPY 首跑出曲线）· **M1-B 已完成**（§14 八项验收全过）· **M1-C 已完成**（§15 十五项验收全部通过；213 项测试全绿；12 项决策见 §10/§11）
 > **项目代号**：`sellput`（阶段一策略为 Sell Put；平台本体面向全部期权策略）
 > **定位**：本地运行的个人期权策略研究与回测平台 —— 策略定义 → 参数配置 → 历史回测 / Monte Carlo → 分析可视化 → 实验对比。
 > **语言约定**：代码、配置、日志为英文；文档为中文。
@@ -13,6 +13,8 @@
 
 **v0.6 变更记录**（M1-B 已获授权，进行中）：M1-B 重定义为**多策略架构**（Sell Put + Buy & Hold，通用回测引擎）——原 M1-B 内容（analysis 指标、CLI 参数化、sweep + train/test 纪律）推迟为 M1-C；报告增强已提前交付（experiments/m1a/report.html）· 订单模型泛化（`OrderIntent.asset: OptionSpec | EquitySpec`）· Trade 泛化（`asset_kind` + 期权专属字段可空）· `BuyHoldStrategy`（全仓买入持有、期末开盘清仓、分红不付现）· `Strategy.on_final` 期末钩子 · CLI `--strategy` · 新增 §14 M1-B Acceptance Criteria。
 
+**v0.7 变更记录**（M1-C 已立项，12 项决策全部确认，§10/§11）：**里程碑重排**——M1-C=基础研究能力（参数配置化 / 网格 sweep / 固定 train-test / RV 市场环境分桶 / 基础风险指标 / manifest+compare / 基础研究报告）；M2=研究深度（Monte Carlo / 完整 market regime / Experiment Tracking / **SL+Roll 第一批** / Tail Risk 深化）；M3=数据真实性（Real Historical Option Chain / Bid·Ask / 流动性 / Early Assignment / 真实保证金 / **Synthetic vs Real Fidelity Study**）· 新增模块 `analysis` / `vol` / `research`（`backtest`/`report` 不单独立项，引擎核心零改动，§15 AC-11）· 双基准立项（Price / Total Return B&H，§6.4）· MDD 约束"无可行解"显式输出行为 · sweep 默认 metrics-first（`--save-all` 可选）· 研究声明原则（参数搜索结果 ≠ 未来预测，§17.2）· 新增 §15 M1-C Acceptance Criteria、§16 M2/M3 高层范围、§17 金融假设登记与研究效度。
+
 ---
 
 ## 0. 阅读指南
@@ -21,9 +23,10 @@
 - §2 模块拆分：14 个模块的职责与边界，以及"用户 12 项需求 → 模块"的覆盖关系。
 - §3 设计决策点：17 个决策，每个给出选项、优缺点、推荐方案与理由。
 - §4 领域模型与数据流：**Raw/Derived 数据边界、核心对象的数据结构与生命周期、每日事件序列**。
-- §5~§7：Sell Put 策略参数（M0 简化版）、指标（含 IV Rank/RV）、测试策略。
-- §8 里程碑：M0~M3 每步的交付物与验收点。
+- §5~§7：Sell Put 策略参数（M0 简化版）、指标（含 IV Rank/RV 与 §6.4 双基准）、测试策略。
+- §8 里程碑：M0~M4 每步的交付物与验收点（v0.7 重排：M1-C 研究能力 / M2 研究深度 / M3 数据真实性）。
 - §10 决策记录：唯一事实来源；§11 列出仍待你决策的问题。
+- §15 M1-C 需求与验收标准（v0.7，十五项）；§16 M2/M3 高层范围；§17 金融假设登记与研究效度。
 
 ---
 
@@ -38,13 +41,14 @@
 
 ### 1.2 Phase 1 范围（In Scope）
 
-- **数据**：标的日线历史（免费源）+ 合成数据生成器（开发与金标准测试）+ 期权 EOD 链（可插拔 Provider，真实付费数据在 M2 接入）。
+- **数据**：标的日线历史（免费源）+ 合成数据生成器（开发与金标准测试）+ 期权 EOD 链（可插拔 Provider，真实付费数据在 **M3** 接入，v0.7 决策）。
 - **标的**：单 run 单标的；两类基准标的均支持 —— ETF（SPY/QQQ，美式、实物结算、可指派）与指数（SPX，欧式、现金结算），对应两种定价/结算风格。
 - **策略**：M0/M1 只实现 Sell Put **基础规则**（DTE 30 / delta 0.20 / 止盈 50% / DTE≤3 强制退出）；**Stop Loss 与 Roll 属 M2 策略增强**，因它们显著增加 position state machine 与 execution 复杂度。
 - **账户模拟**：Cash / 期权仓位 / 股票仓位（指派产生）/ 保证金 / 逐日盯市 PnL / 归因 / Greeks 聚合。
 - **模拟引擎**：日频事件驱动；到期结算 + 简化提前指派模型（可选，默认关）；指派后默认次日开盘卖出股票（Wheel 属后续阶段）。
 - **历史回测**：单标的、日频；网格参数 sweep；结果落盘 + 指标 + 图表 + HTML 报告。
-- **Monte Carlo**（M3）：GBM 路径 + 简化 IV 曲面定价 + PnL 分布统计（VaR/CVaR/回撤分布/指派率/保证金缺口概率）。
+- **参数研究（M1-C）**：策略参数配置化、网格 sweep、固定 train/test（2005–2018 / 2019–2024）、RV 市场环境分桶、MDD 约束筛选视图、manifest + compare、双基准（§6.4）、初步研究报告。
+- **Monte Carlo**（M2）：模拟对象（underlying returns / volatility / option prices / strategy P&L）、方法（bootstrap / 参数化厚尾）与 IV 建模在 M2 立项时单独设计（v0.7 决策，§16）；M0 已交付 seeded GBM 路径生成器（`mc.py`）。
 - **工程**：类型标注、Pydantic 配置校验、pytest（定价对拍 + 守恒不变量 + 金标准场景 + 防前视）、确定性随机种子。
 
 ### 1.3 明确排除（Out of Scope，Phase 1 不做）
@@ -56,7 +60,7 @@
 | 分钟级 / 盘中回测 | 引擎按"交易日事件"抽象，未来可升级，本阶段不承诺 |
 | 精细公司行动（拆股除外） | 依赖数据源提供的调整后价格 |
 | 税务优化、多币种、保证金利息 | 忽略或留常量参数（利率可配） |
-| ML 信号、自动参数优化器 | 防止过拟合误导；阶段一只有网格 sweep |
+| ML 信号、自动参数优化器 | 防止过拟合误导；只有网格 sweep；**MDD 约束筛选为筛选工具而非优化器，不构成预测**（v0.7，§17.2） |
 | 完备的提前行权微观模型 | 阶段一用到期规则 + 可选简化概率模型（见 D12） |
 | Stop Loss / Roll | **M2 再实现**（见 §5）；M0/M1 刻意保持简单 |
 
@@ -115,7 +119,7 @@
        │                  │
        ▼                  ▼
  ┌────────────┐     ┌────────────┐
- │  strategy  │     │  backtest  │  编排: run/sweep/实验目录
+ │  strategy  │     │  research  │  编排: run/sweep/train-test/实验目录
  └────────────┘     └─────┬──────┘
                           ▼
                    ┌────────────┐   ┌────────────┐
@@ -125,24 +129,26 @@
 
 **依赖规则**：只允许下层被上层依赖（linter 约束 import 方向）；`sim` 是历史回测与 MC 共用的唯一事件语义核心。
 
+**v0.7 调整**：M1-C 新增 `research`（承接原 `backtest` 编排职责）、`analysis`、`vol` 三模块；`backtest` / `report` 不单独立项（报告由 `scripts/` 承担）。研究层只重复调用引擎、不侵入引擎（§15 AC-11）。
+
 ### 2.3 各模块职责与关键接口（伪代码）
 
 | 模块 | 职责 | 关键类型 / 函数 |
 |---|---|---|
 | `config` | 全部配置的 Pydantic v2 schema；YAML 加载/导出；sweep 网格展开；`version` 字段做演进管理 | `BacktestConfig`, `DataConfig`, `StrategyConfig`, `SimConfig`, `MCConfig`; `load(path) -> BacktestConfig`; `expand_sweep(cfg) -> list[BacktestConfig]` |
-| `data` | **Raw 数据**接入、规范化与缓存（Raw/Derived 边界见 §4.0）；交易日历 | `MarketDataProvider`（Protocol）：`get_spot_history(symbol, start, end) -> BarFrame`、`get_option_chains(symbol, dates) -> ChainFrame`；实现：`YFinanceProvider`、`SyntheticProvider`、`CSVProvider`（M2：`ThetaDataProvider` / `CBOEDataShopProvider`）；`DataCache`（DuckDB/Parquet）；`MarketSnapshot` 物化 |
+| `data` | **Raw 数据**接入、规范化与缓存（Raw/Derived 边界见 §4.0）；交易日历 | `MarketDataProvider`（ABC）：`sessions()`、`close_snapshot(day, extra_strikes)`、`open_snapshot(...)`、`expiries_available(day)`；实现：`SyntheticProvider`（全合成）、`HybridProvider`（真实标的日线 + 合成链）；真实标的价格三级获取 `load_price_series`（本地缓存 → yfinance → 手动 CSV）；M3 新增 `HistoricalOptionProvider`（真实期权链，§16.2） |
 | `instruments` | 期权合约与日历静态信息 | `OptionSpec(underlying, expiry, strike, right, style, multiplier, settlement)`；到期日生成（月度第 3 周五 / 周频，可配）；OCC 代码解析（备用） |
 | `pricing` | **PricingEngine 抽象**与实现、风险指标、IV 求解、分红模型 | `PricingEngine`（ABC）：`price(snapshot_ctx, spec) -> PriceResult{Greeks}`；实现：`BlackScholesEngine`（欧式）、`CRRBinomialEngine`（美式，默认 200 步）；`DividendModel`（ABC）：`yield_rate(ts) -> float`（预留 `dividend_schedule(ts, horizon)`）；实现：`ContinuousYieldDividendModel`（M0，预留 `DiscreteDividendModel`）；`implied_vol(market_price, ...) -> σ`；`forward(S,T,r,q)` |
-| `vol` | 波动率估计、IV 曲面模型、**IV Rank / IVP / RV** | `hist_vol(returns, model=close2close|ewma) -> σ`；`realized_vol(returns, window=20)`；`iv_rank(iv_series, window=252)`、`iv_percentile(...)`；`IVSurface`（ABC）：`vol(T, K, S, date) -> ndarray`；实现：`FittedSkewSurface`（M2）、`ConstantSurface`；M4 候选：SVI |
+| `vol` | 波动率统计（M1-C：IV Rank / RV / RV 分桶）；IV 曲面模型属 M2+ | `hist_vol(returns, model=close2close|ewma) -> σ`；`realized_vol(returns, window=20)`；`iv_rank(iv_series, window=252)`、`iv_percentile(...)`、`rv_bucket(...)`；`IVSurface`（ABC，M2+）：`FittedSkewSurface`（M2）、`ConstantSurface`；M4 候选：SVI |
 | `strategy` | 策略定义与下单意图生成 | `Strategy`（ABC）：`params_schema: type[BaseModel]`、`on_open(ctx, state) -> list[OrderIntent]`、可选 `on_close(...)`；实现：`SellPutStrategy`（§5）；后续 `CoveredCallStrategy`、`WheelStrategy`（SellPut/CoveredCall 状态机） |
 | `execution` | OrderIntent → Order → Fill | `OrderIntent`, `Order`, `Fill`（§4.1）；`FillModel`（`next_open_mid` / `close_mid`）+ 滑点（bps）+ 手续费（每合约 + 每单） |
 | `portfolio` | 账户状态与逐日会计 | `Cash`, `OptionPosition`, `EquityPosition`, `Portfolio`, `PortfolioState`（§4.1）；`mark_to_market(ctx)`；每日 PnL 分解（附录 B）；事件 `open/close/expire/assign`；`check_invariants()`（资金守恒断言） |
 | `margin` | 保证金需求与账户约束 | `MarginModel`（ABC）：`requirement(pos, market) -> float`；实现：`CashSecuredMargin`、`SimplifiedRegTMargin`（附录 A；**research approximation，非券商 Reg-T 完整复现**）；`MarginPolicy`: `reject`（拒绝开仓）/ `liquidate`（次日开盘强平） |
 | `sim` | 日频事件引擎（确定性核心） | `run_simulation(cfg, data, strategy, portfolio) -> list[PortfolioState]`；每日事件序列见 §4.2 |
-| `mc` | Monte Carlo 路径模拟（M3） | `generate_paths(seed, n, days, μ, σ) -> (n, days) ndarray`；跨路径向量化定价与事件执行；汇总统计（终值分位、VaR/CVaR、回撤分布、指派率、保证金缺口率） |
-| `backtest` | 编排层 | `run(cfg) -> RunResult`（历史与 MC 统一入口）；`sweep(cfg) -> list[RunResult]`（多进程）；实验目录写入（§4.3） |
-| `analysis` | 指标与归因 | §6 全部指标（含 IV Rank 分桶统计）；PnL 归因表；按 DTE/delta 分桶；`compare(runs) -> DataFrame` |
-| `report` | 可视化与导出 | Plotly 图表集；`render_html(result)`；Parquet/JSON 落盘 |
+| `mc` | Monte Carlo 路径模拟（M2；M0 已交付 seeded GBM 路径生成器，完整引擎 M2 立项设计，§16.1） | `generate_paths(seed, n, days, μ, σ) -> (n, days) ndarray`；未来：跨路径定价与事件执行；汇总统计（终值分位、VaR/CVaR、回撤分布、指派率、保证金缺口率） |
+| `research` | 编排层（M1-C 新增；原 `backtest` 模块**不单独立项**） | `sweep(grid, base_cfg, train_window) -> list[SweepResult]`（多进程）；`split(train_end)`；`write_manifest(...)`；MDD 约束筛选视图（无可行解显式输出）；`compare(runs)` |
+| `analysis` | 指标与归因（M1-C 实现；纯函数，输入 states/trades/prices，无 I/O） | §6 全部指标（含 RV 分桶统计、§6.4 双基准）；PnL 归因表；按**实际入场** DTE/delta 分桶；train/test 分段指标 |
+| `report` | 可视化与导出（**不单独立项**，由 `scripts/` 承担） | M1-C：sweep 热图报告 + 研究 Markdown 报告（含 §17.3 效度声明）；现有 `build_report.py` 保持 |
 
 ### 2.4 仓库目录结构（`options-platform/`，即未来 git 根）
 
@@ -200,7 +206,7 @@ options-platform/
 
 参考：[ThetaData Subscriptions](https://http-docs.thetadata.us/Articles/Getting-Started/Subscriptions.html)、[CBOE DataShop Option EOD Summary](https://datashop.cboe.com/option-eod-summary)（价格以官网当前为准）。
 
-**结论**：A 起步；M2 前再议真实数据采购。
+**结论**：A 起步；**M3-A 前**再议真实数据采购（v0.7：供应商重估标准见 §16.2）。
 
 #### D5 数据存储
 - **A. DuckDB + Parquet（推荐）** — 列存压缩、嵌入式零运维、SQL 直查 Parquet 目录。
@@ -221,7 +227,7 @@ options-platform/
 
 **明确声明（写入代码文档与报告）**：**Black-Scholes + 连续分红 q 对 SPY 只是近似，不是严格的美式期权定价**。配置允许强制 `engine: bs` 做快速近似回测，但报告必须标注"近似定价"。
 
-**推荐**：M0 同时实现 BS 与 CRR 两个引擎（SPY 严格定价需要 CRR）；BS 引擎同时是 MC 向量化定价（M3）的载体。
+**推荐**：M0 同时实现 BS 与 CRR 两个引擎（SPY 严格定价需要 CRR）；BS 引擎同时是 MC 向量化定价（M2）的载体。
 
 **✅ 已确认**：CRR 进入 M0；`engine: auto`（SPX→BS、SPY→CRR），BS 可作 SPY 近似/回退；CRR 第一版保持标准实现，**不加入高级 early-exercise 优化**；`summary.json` 与报告明确标注所用模型类型。
 
@@ -260,7 +266,7 @@ options-platform/
   2. **禁止回测中使用未来数据**：任何模块不得访问晚于当前事件时刻的数据；`MarketSnapshot` 不可变且带时间戳，违规在代码评审与测试中拦截。
   3. 配套测试见 §7（数据平移测试 + 快照分离断言）。
 
-#### D10 Monte Carlo 定价与执行方案（M3）
+#### D10 Monte Carlo 定价与执行方案（M2，立项时单独设计，v0.7 §16.1）
 - **A. IV 曲面 + 解析 BS 向量化定价（推荐）** — 跨路径批量 `(S,K,T,σ)` 数组一次计算；1000 路径 × 252 天目标 <5 分钟。
 - **B. 逐路径逐日 CRR** — 量级不可行，除非 numba 重写。
 - **C. 常数波动率 GBM** — 无 skew，只做校验基准（附录 C.4）。
@@ -464,14 +470,14 @@ PortfolioState{
 5. **保证金检查**：`margin_used > 可用资金` ⇒ 按 `MarginPolicy`（默认拒绝新开仓；`liquidate` 则挂次日开盘强平单）。
 6. **快照**：生成 `PortfolioState(t)`。
 
-MC 模式（M3）复用同一事件序列，1~5 步对全部路径批量向量化执行（D10），随机数只用 seed 固定的 `numpy.random.Generator`。
+MC 模式（M2）复用同一事件序列，1~5 步对全部路径批量向量化执行（D10），随机数只用 seed 固定的 `numpy.random.Generator`。
 
 ### 4.3 结果 Schema 与实验目录
 
 ```
 runs/20260115-093000_spy-d30_d20/
-├─ config.json           # 完整展开配置（含 sweep 单点值、seed、数据版本、包版本）
-├─ summary.json          # §6 全部指标 + 配置摘要 + 定价引擎标注（近似定价显式声明）
+├─ manifest.json         # v0.7 必需：完整配置 + git commit + 包版本 + 数据集指纹 + 指标（§15 F8）
+├─ metrics.json          # §6 全部指标（train/test/full 三段）+ 配置摘要 + 定价引擎标注（近似定价显式声明）
 ├─ equity_curve.parquet  # date, equity, cash, positions_value, margin_used/required,
 │                        #   greeks 汇总, attribution, benchmark_equity
 ├─ trades.parquet        # 每笔 Trade（含 exit_reason、entry_iv、iv_rank_at_entry 等分桶字段）
@@ -480,6 +486,8 @@ runs/20260115-093000_spy-d30_d20/
 ```
 
 MC 额外输出：`mc_paths_summary.parquet`（每条路径终值/最大回撤/是否指派/是否保证金缺口）。
+
+> v0.7：当前 M1-A/M1-B 实际产出为 CSV（states/trades/prices）+ summary.txt + HTML；M1-C 起由 research 层统一写入 manifest.json / metrics.json（sweep 默认 metrics-first，全量 artifacts 经 `--save-all` 可选，§15 N4）。
 
 ### 4.4 完整配置示例（M0/M1 目标形态）
 
@@ -491,12 +499,17 @@ run:
   save_snapshots: false
 
 data:
-  provider: yfinance            # synthetic | csv | (M2: thetadata | cboe_datashop)
+  provider: hybrid              # 实现支持：synthetic（全合成）| hybrid（真实标的 + 合成链）
+                                # （M3：真实历史期权链 Provider，届时另行立项，§16.2）
   symbol: SPY
   start: "2015-01-01"
   end: "2025-12-31"
-  cache_dir: data/cache
-  option_chains: synthetic      # 期权链来源；真实数据接入前用 synthetic 或 csv
+  hybrid:                       # provider=hybrid 时的数据获取参数（M1-A 三级获取）
+    vol_window: 20              # 驱动合成链 iv_atm 的滚动已实现波动率窗口（交易日）
+    cache_dir: data             # 本地缓存目录（data/<symbol>_daily.csv）
+    csv_path: null              # 手动 CSV 兜底；null = 自动扫描 cache_dir 下的 *.csv
+    buffer_days: 70             # 起点前补数据（滚动波动率 / 前收 / 波动率分位预热）
+    offline: false              # true = 只用缓存或手动 CSV，不联网
 
 market:
   rate: 0.04                    # 无风险利率
@@ -533,10 +546,11 @@ strategy:
     entry_frequency: weekly
     max_open_positions: 1
 
-sweep: {}                       # 可选: {dte_target: [30, 45], delta_target: [0.15, 0.20, 0.25]}
-split: {train_frac: 0.70}       # D14 样本外纪律
+sweep: {}                       # M1-C: {dte_target: [...], delta_target: [...], profit_target_pct: [...]}
+split: {train_end: "2018-12-31"}  # M1-C 固定切分（train 2005–2018 / test 2019–2024）；D14 纪律
+benchmark: {price_return: true, total_return: true}  # M1-C 双基准（§6.4）
 
-monte_carlo: null               # M3
+monte_carlo: null               # M2（方法与 IV 建模待立项设计，§16）
 ```
 
 ---
@@ -557,6 +571,8 @@ monte_carlo: null               # M3
 | `assignment_policy`（sim 层） | `sell_next_open` | 指派后次日开盘卖出股票 |
 
 **规则优先级**（同一天多条命中）：`DTE≤3 强制退出 > 止盈 50% > 新开仓`。
+
+**v0.7（M1-C）**：合成链**保留月度到期结构**（不加周度，保持 M0/M1 历史结果可回归；周度到期属 M3 数据真实性议题，§16.2）。参数研究中 DTE 一律按**实际入场 `dte_at_entry`** 分桶分析，不得假定 target DTE 等于实际 DTE；合成链到期结构限制必须写入报告（§15 AC-10）。
 
 **M0/M1 不实现（✅ 已确认，M2 引入）**：`stop_loss_multiple`（止损 2× 权利金）与 `roll`（滚动换仓）。理由：两者引入跨日持仓状态机与更复杂的执行/记账路径，先以最简规则跑通全链路。M2 引入后优先级变为：`止损 > 止盈 > roll > DTE 退出 > 新开仓`，接口已预留（`OrderIntent.reason: ROLL|STOP_LOSS`）。
 
@@ -580,7 +596,7 @@ monte_carlo: null               # M3
 | 风险（含 MC） | 指派率、最大单笔亏损、MC：终值 P5/P1 分位、VaR95、CVaR95、回撤分布、保证金缺口概率、盈利概率 |
 | 归因 | 每日 PnL 分解（附录 B）按 delta/theta/vega/残差累计 |
 
-**指标范围封版声明**：以上清单为 Phase 1 最终指标集；后续新增指标需单独立项讨论，不随需求无限扩展。
+**指标范围封版声明**：以上清单为 Phase 1 最终指标集；后续新增指标需单独立项讨论，不随需求无限扩展。**v0.7 立项**：新增双基准（Price Return / Total Return B&H，§6.4），其余封版不变。
 
 ### 6.2 新增指标定义与分桶统计（✅ 已确认）
 
@@ -590,9 +606,25 @@ monte_carlo: null               # M3
 
 **按 IV Rank 分层的策略表现**（`analysis` 输出，`report` 展示）：默认 4 档 —— `<25` / `25–50` / `50–75` / `≥75`；每笔 `Trade` 按 `iv_rank_at_entry` 归桶，输出分桶的：样本数、胜率、平均 PnL、资本效率、平均持仓 DTE。用于观察策略在不同波动率环境下的表现差异。
 
-### 6.3 图表（`report` 模块，Plotly）
+### 6.3 图表（`scripts/` 报告生成，Plotly）
 
-净值曲线（vs 标的买入持有）、回撤曲线、逐笔 PnL 分布直方图、持仓 Greeks 时序（delta/theta/vega）、保证金占用时序、IV（IV Rank）与已实现波动率对比、IV Rank 分桶收益箱线图、按 DTE/delta 分桶统计、MC：路径簇 + 分位带 + 终值分布直方图（M3）。
+净值曲线（vs 标的买入持有双基准）、回撤曲线、逐笔 PnL 分布直方图、持仓 Greeks 时序（delta/theta/vega）、保证金占用时序、IV（IV Rank）与已实现波动率对比、IV Rank 分桶收益箱线图、按实际入场 DTE/delta 分桶统计、MC：路径簇 + 分位带 + 终值分布直方图（M2）。
+
+### 6.4 基准定义（v0.7 立项：双基准）
+
+**决策（§10）**：Sell Put 收取权利金属收益型策略，仅用价格型基准会产生解释偏差，故 M1-C 起同时输出两种基准；两者定义必须写入报告。
+
+| 基准 | 定义 | 数据 | 说明 |
+|---|---|---|---|
+| Price Return B&H | 期末收盘价 ÷ 期初收盘价 − 1（现有口径） | 同一 PriceSeries 收盘序列 | 与策略净值同口径直接比较 |
+| Total Return B&H | 价格收益 + 现金分红再投资（除息日现金分红按**次一交易日开盘价**全额再投，无摩擦、无税） | `PriceSeries.dividends`（已有）+ 开盘价序列 | 在 **analysis 层**计算（`total_return_index(...)`），**不改引擎、不改策略** |
+
+**最小设计原则（v0.7）**：
+
+1. 基准指数为 analysis 层纯函数：输入 prices（open/close）与 dividends（{ex_date: per_share}），输出逐日总回报指数；两种基准的"超额收益"都进入 summary 与报告。
+2. 再投约定固定为"除息日现金分红 ÷ 次一交易日开盘价 → 份额增加"，全程无手续费/税；约定写入报告。
+3. 数据充分性：当前 `PriceSeries.dividends`（yfinance 真实分红 / CSV `Dividends` 列）足以支撑；若未来数据源缺失分红，**必须显式降级声明（回退价格型）而非静默简化**。
+4. 引擎与 B&H 策略**零改动**（B&H 策略仍为分红不付现口径，作为策略对照保留；基准升级只发生在分析/报告层）。
 
 ---
 
@@ -616,10 +648,11 @@ monte_carlo: null               # M3
 
 | 里程碑 | 交付物 | 验收点 |
 |---|---|---|
-| **M0 垂直切片与正确性闸门（本阶段）** | 仓库骨架（uv/pyproject/ruff/pytest）；config；Raw/Derived 数据契约 + `SyntheticProvider`；核心对象（§4.1，最小可用模型）；`pricing`：`PricingEngine` ABC + BS + CRR（标准实现、无高级优化）+ 解析 Greeks + IV 求解；`DividendModel` ABC + 连续 q；`instruments` + 交易日历；`execution`（FillModel/滑点/手续费）；`portfolio`（Cash/Position/PnL/归因）；`margin`（Simplified Reg-T-style + CSP）；`sim`（日频事件循环：到期/指派/保证金，§4.2）；`SellPutStrategy`（§5 四规则）；`mc` 最小路径生成器（seeded GBM）；benchmark 脚本 | **§12 M0 Acceptance Criteria 全部通过** |
-| **M1 历史回测全链路**（M1-A ✅ / M1-B 进行中 / M1-C 推迟） | M1-A：yfinance 真实标的日线 + 本地缓存 + 手动 CSV 兜底；HybridProvider（合成链波动率 = 20 日滚动已实现波动率）；按日股息率；`run_backtest.py` 一键回测 + 收益曲线图。M1-B：多策略架构——订单/Trade/组合/引擎泛化 + `BuyHoldStrategy` + CLI `--strategy`（§14 验收）。M1-C（推迟）：`analysis`（§6 全部指标，含 IV Rank/IVP/RV + 分桶，`Trade.iv_rank_at_entry` 填充）；CLI 参数化；sweep + train/test 纪律（D14）；报告增强已提前交付 | M1-A ✅（2005–2024 SPY 首跑出曲线）；M1-B：§14 八项验收（Sell Put 逐位回归 + Buy & Hold 全链路）；10 年回测 <10s（benchmark） |
-| **M2 真实期权数据与策略增强** | 真实期权链 Provider（按 D4 决策）；IV 抽取与 `FittedSkewSurface`；CSV 导入；**Stop Loss / Roll** 策略增强；HTML 报告完整化 | 真实链回测口径与数据源文档一致；SL/Roll 金标准测试通过 |
-| **M3 Monte Carlo** | 完整 `mc` 引擎：跨路径向量化执行、IV 曲面定价、分布统计与图表 | MC sanity check（附录 C.4）通过；1000×252 <5 分钟（benchmark）；VaR/指派率/回撤分布报告可用 |
+| **M0 垂直切片与正确性闸门（✅ 已完成）** | 仓库骨架；config；Raw/Derived 数据契约 + `SyntheticProvider`；核心对象；`pricing`（BS + CRR + Greeks + IV）；`DividendModel`；`instruments` + 日历；`execution`；`portfolio`；`margin`；`sim`；`SellPutStrategy` 四规则；`mc` seeded GBM 路径生成器；benchmark 脚本 | **§12 M0 Acceptance Criteria 全部通过** |
+| **M1 历史回测全链路（✅ 已完成：M1-A / M1-B）** | M1-A：真实 SPY 日线（缓存/yfinance/CSV 三级）+ HybridProvider（合成链，20d 滚动 RV 驱动）+ 按日股息率 + 一键回测。M1-B：多策略架构（订单/Trade/组合/引擎泛化 + `BuyHoldStrategy` + `on_final` + CLI `--strategy`，§14） | §13 八项 / §14 八项验收全过；10 年回测 <10s（benchmark target） |
+| **M1-C 基础研究能力（下一步实施）** | `analysis`（§6 全部指标 + §6.4 双基准）、`vol`（IV Rank / RV / RV 分桶）、`research`（sweep / train-test / manifest / MDD 约束筛选）；CLI 策略参数化；`run_sweep.py` / `compare_runs.py`；sweep 热图报告 + 研究 Markdown 报告 | **§15 十五项验收全过**；引擎核心 diff 为空（AC-11）；既有 93 测试 + 新增测试全绿 |
+| **M2 研究深度** | Monte Carlo（模拟对象、方法与 IV 建模立项时单独设计，§16.1）；完整 market regime（bull/bear/sideways/高·低波动/极端事件）；Experiment Tracking（索引库 + 对比 UI）；**SL / Roll 第一批**（四臂对比研究）；Tail Risk 深化；（可选）walk-forward | 逐项单独立项（§16.1） |
+| **M3 数据真实性** | Real Historical Option Chain（供应商按 §16.2 标准重估后接入）；Bid/Ask、流动性过滤；Early Assignment；更真实保证金；**Synthetic vs Real Fidelity Study** | 逐项单独立项（§16.2）；fidelity study 回答"模型假设是否改变研究结论" |
 | **M4（预留）** | Covered Call → Wheel → Put Spread；SVI 曲面；离散分红 `DiscreteDividendModel`；可选 Streamlit UI；可选盘中数据 | 逐项单独立项 |
 
 **性能说明（✅ 已确认）**：性能数值（10s / 5min）是 benchmark target，不是 correctness requirement —— 不同机器性能不应直接导致功能测试失败；benchmark 以独立脚本 + `@pytest.mark.benchmark` 标记测试承载，默认测试运行排除。
@@ -630,11 +663,12 @@ monte_carlo: null               # M3
 
 | 风险 | 影响 | 缓解 |
 |---|---|---|
-| 期权历史数据获取/成本（最大外部风险） | M2 卡住或回测失真 | Provider 抽象 + 合成数据先行；M2 前小额订阅验证（D4 已确认起步路径） |
+| 期权历史数据获取/成本（最大外部风险） | M3 卡住或回测失真 | Provider 抽象 + 合成数据先行；M3-A 前按 §16.2 标准重估供应商并小额订阅验证（v0.7 决策） |
 | 回测过拟合（sweep 制造虚假结论） | 结论不可信 | train/test 纪律（D14）写入 CLI 行为；参数维度限制；实验全程留档 |
 | Python 性能（MC） | 模拟不可用 | 跨路径向量化 + 多进程；numba 作逃生舱；性能目标写进验收 |
 | 模型假设偏差（BS/GBM 无跳变、常数 r、**BS 近似 SPY 定价**） | 尾部风险低估、SPY 定价偏差 | 报告显式标注近似定价；敏感性分析 + 压力场景；SPY 默认 CRR；M4 可选 jump 模型 |
 | 数据前视偏差 | 回测虚高 | 快照时点分离（D9）+ 防前视测试（§7） |
+| Synthetic 结论外推（把合成假设下的数字当真实业绩） | 结论不可信、作品集可信度受损 | §17 假设登记 + 报告强制效度声明（§17.3）；M3 Fidelity Study 定量验证 |
 | 提前行权/公司行动细节误差 | 少量场景失真 | 到期规则默认 + 偏差文档化；提前指派模型可选开关 |
 | 范围蔓延（Stop Loss/Roll/多品种提前） | 交付延迟 | §1.3 排除清单即红线；SL/Roll 已排至 M2；M4 逐项立项 |
 
@@ -644,7 +678,7 @@ monte_carlo: null               # M3
 
 | 决策 | 状态 | 结论 |
 |---|---|---|
-| D4 数据源 | ✅ 已确认 | 免费 + 合成数据起步；真实期权数据 M2 前再议 |
+| D4 数据源 | ✅ 已确认 | 免费 + 合成数据起步；真实期权数据 M2 前再议（v0.7：移至 M3-A 前，重估标准 §16.2） |
 | D2 交互形态 | ✅ 已确认 | Jupyter + CLI 起步；Streamlit M3 后按需 |
 | 标的范围 | ✅ 已确认 | ETF（SPY/QQQ，美式实物结算）+ 指数（SPX，欧式现金结算） |
 | D17 分红 | ✅ 已确认 | M0 用连续 q；`DividendModel` 抽象可替换；预留 discrete 接口；不假设标的共用同一模型 |
@@ -676,6 +710,19 @@ monte_carlo: null               # M3
 | M1-B 股票会计 | ✅ 已确认 | 组合新增 buy_equity + EquityLot（FIFO）；买入按成交价并入 avg_cost；卖出配对记 Trade；指派产生的无 lot 股票卖出仍不记 Trade（M0 行为不变）；states.positions 增加股票快照（mark=收盘价，unrealized=(S−avg_cost)×股数）；Greeks/归因仍仅期权域（股票 PnL 走净值曲线，扩展留待后续） |
 | M1-B 股票保证金口径 | ✅ 已确认 | 买入时按 50% 初始保证金（CSP 模型为 0）检查可用资金并钳制股数；持仓日 margin_used 按 50% 市值计入（与 M0 口径一致）；100% 现金买入后 margin_blocked 属预期现象，期末清仓经 on_final 钩子不受影响 |
 | M1-B 回归闸门 | ✅ 已确认 | Sell Put 全链路逐位不变（M1-A 离线复跑：期末 173,061.18 / 529 笔 / 最大回撤 −85.05%）；既有 80 项测试全绿 |
+| M1-C 里程碑重排 | ✅ 已确认 | M1-C=基础研究能力（参数配置化/sweep/train-test/RV 分桶/基础风险指标/manifest+compare/基础研究报告）；M2=研究深度（MC/完整 regime/experiment tracking/SL-Roll/tail risk 深化）；M3=数据真实性（真实链/fidelity study）；§8 已重排 |
+| M1-C 市场环境 | ✅ 已确认 | M1-C 仅 RV 四桶分桶（回答"低波动 vs 高波动环境表现是否不同"）；完整 bull/bear/sideways/高·低波动/极端事件分类属 M2，不在 M1-C 过度设计 |
+| M1-C MDD 约束行为 | ✅ 已确认 | 无可行解必须**显式输出**；不得自动放宽 MDD、不得返回"最近似"冒充满足约束；可附当前参数空间最小 MDD 组合，但必须标注"最接近约束 ≠ 满足约束" |
+| M1-C 合成链到期结构 | ✅ 已确认 | 保留月度到期、不加周度（保 M0/M1 回归）；DTE 分析用实际入场 `dte_at_entry`；报告声明到期结构限制；周度到期属 M3 |
+| M1-C train/test | ✅ 已确认 | 固定 split：train 2005–2018 / test 2019–2024；sweep 仅用 train；test 仅最终 OOS evaluation；M1-C 不做 walk-forward（M2 再议）；报告声明 test 样本统计噪声 |
+| M1-C 实验记录 | ✅ 已确认 | 轻量：manifest + experiment metadata + compare；完整 Experiment DB / GUI 属 M2 |
+| M3-A 数据供应商 | ✅ 已确认（暂缓） | M1-C/M2 不做字段级设计；M3-A 立项前按 价格/API 可用性/历史覆盖/Greeks·IV/Bid·Ask/contract-level/License 重新评估；当前仅需 Historical Option Provider 抽象存在 |
+| M2 MC 范围与 IV 建模 | ✅ 已确认（延后） | M2 立项时单独设计；区分"历史收益路径 bootstrap"与"期权 IV/vol dynamics 建模"两个问题；须明确模拟对象（underlying returns / volatility / option prices / strategy P&L 的组合）并逐项声明假设与局限 |
+| M1-C 双基准 | ✅ 已确认 | Price Return 与 Total Return B&H（分红再投，§6.4）同时输出；定义写入报告；引擎与策略零改动；分红数据不足时显式降级声明而非静默简化 |
+| M2 SL/Roll | ✅ 已确认 | M2 第一批；四臂对比（No SL/No Roll vs SL vs Roll vs SL+Roll）；作为研究假设验证，不预设"一定降低风险/提高收益" |
+| M1-C sweep 保存粒度 | ✅ 已确认 | 默认 metrics-first（strategy/params/train-test 窗口/dataset metadata/code version/metrics/manifest）；`--save-all` 可选全量 states/trades/equity curves |
+| M1-C 研究声明原则 | ✅ 已确认 | 参数搜索结果 ≠ 未来预测；"train 最优"只限"当前模型、数据与研究区间下、训练集内"；test 用于样本外验证（§17.2） |
+| M1-C 模块边界 | ✅ 已确认 | 新增 `analysis` / `vol` / `research`；`backtest` / `report` 不单独立项（scripts 承担）；引擎核心在 M1-C 内 diff 为空（§15 AC-11） |
 
 ---
 
@@ -684,6 +731,8 @@ monte_carlo: null               # M3
 v0.4 全部待决策问题已答复并写入 §10 决策记录：CRR 进 M0 · 对象模型最小可用原则 · IV Rank/RV 默认值与分桶 · SPX 结算简化 · 保证金命名与声明 · 性能 benchmark 定性 · 其余推荐项整体通过。**当前无待决策项**，M0 已获授权开始。
 
 **v0.6（M1-B）**：用户直接下达 M1-B 范围（多策略架构；仅 Sell Put + Buy & Hold；暂不做参数配置化与其他策略）；上述 §10 中 M1-B 各行决策均依此授权记录，无待确认项。
+
+**v0.7（M1-C）**：用户下达 M1-C 十二项决策（里程碑重排 / RV 分桶 / MDD 无可行解行为 / 月度到期保留 / 固定 train-test / 轻量实验记录 / M3-A 供应商暂缓 / MC-IV 建模延后 / 双基准 / SL-Roll 首批 / metrics-first / 无预测原则），已全部写入 §10 决策记录与 §15 验收标准；**当前无待确认项**。M2 立项时需单独确认：Monte Carlo 模拟对象与 IV 建模、walk-forward 范围、Experiment Tracking 形态。
 
 ---
 
@@ -742,6 +791,209 @@ M1-B 完成后，以下每一条都必须有对应测试或脚本证据并通过
 | 8 | 交付体验 | trades.csv 兼容扩展（asset_kind/symbol，期权行数值不变）；summary.txt 记录 strategy；可视化报告兼容两种策略（时间线/直方图正确渲染股票交易） |
 
 **M1-B 明确不做**：其他策略（Covered Call / Put Spread / Wheel，M4 沿本架构立项）；Sell Put 参数配置化；analysis 指标（IV Rank/IVP/RV + 分桶）；sweep + train/test；股票分红付现；股票腿 Greeks/归因。
+
+---
+
+## 15. M1-C Acceptance Criteria（基础研究能力，v0.7）
+
+> v0.7 经用户 12 项决策确认（§10/§11）。实施时以下每一条都必须有对应测试或脚本证据。
+> **核心原则**：研究层（`analysis` / `vol` / `research`）全部位于引擎之外，只重复调用引擎；引擎核心模块在本里程碑内 **diff 必须为空**（AC-11）。
+
+### 15.1 目标与边界
+
+回答第一阶段核心研究问题：**Sell Put 的 DTE / Delta / Take Profit 如何影响收益与风险**（Return / CAGR / MDD / risk-adjusted / 胜率 / 尾部）。
+
+- **做**：参数配置化、网格 sweep、2D 热图分析、固定 train/test、RV 市场环境分桶、基础风险指标、manifest + compare、初步研究报告、双基准。
+- **不做**：Monte Carlo、完整 market regime 分类、walk-forward、SL/Roll、真实期权数据、周度到期、实验数据库/GUI —— 分别属 M2 / M3（§16）。
+
+### 15.2 功能需求
+
+| ID | 需求 |
+|---|---|
+| F1 | 策略参数配置化：`run_backtest.py` 增加 `--dte --delta --tp`（可选 `--dte-exit --entry-frequency --max-open-positions`）；Pydantic 校验沿用（delta∈(0,0.5)、tp∈[0,1]） |
+| F2 | 网格 sweep：`run_sweep.py --dte 20,30,45,60 --delta 0.10,...,0.30 --tp 0.25,...,1.00` 全组合（≤80）；多进程（Windows spawn）；每组合独立 config/seed，结果与网格大小、顺序、进程数无关 |
+| F3 | 2D 参数分析：每个指标输出 DTE×Delta 热图（固定 TP）+ 1D 边际线 + 明细表；DTE 维度按**实际入场 `dte_at_entry`** 分桶解释；报告声明合成链月度到期限制（§5.1 v0.7） |
+| F4 | 约束筛选视图：`--max-mdd 0.30 --sort-by cagr` 只在 train 段筛选排序；**可行集为空时显式输出"无可行解"**，不自动放宽、不返回最近似冒充；可附最小 MDD 组合并标注"最接近约束 ≠ 满足约束" |
+| F5 | 固定 train/test：`split.train_end=2018-12-31`（train 2005–2018 / test 2019–2024）；sweep 只能读 train；test 仅最终 OOS evaluation；不做 walk-forward；报告声明 test 样本统计噪声 |
+| F6 | 基础风险指标（`analysis`）：总收益/CAGR/年化波动率/Sharpe(rf 可配)/Sortino/Calmar/MDD+回撤持续天数/胜率/平均盈亏/Profit Factor/年均交易数/P5·最差单笔/收益分布/资本效率 |
+| F7 | RV 市场环境分桶（`vol`）：入场日 RV（20d 滚动、252d 窗口分位）四桶 <25/25–50/50–75/≥75；每桶 笔数/胜率/平均 PnL —— 只回答"低波动 vs 高波动环境表现是否不同" |
+| F8 | Manifest：每 run 写 `manifest.json`（完整展开配置、git commit、包版本、数据集指纹、train/test 窗口、`test_eval_count`、指标）；`compare_runs.py` 合并对比（train 可排序、test 禁排序，D14） |
+| F9 | 基础研究报告：自动生成 Markdown —— 假设清单（§17.1）、窗口/网格、约束可行性、Top-N、敏感性观察、效度声明（§17.3 模板） |
+| F10 | 双基准：Price Return 与 Total Return B&H 同时输出（§6.4）；超额收益对双基准分别报告 |
+| F11 | 无预测原则：报告措辞必须是"在当前模型/数据/研究区间下，train 上 X 表现最好"；禁止把参数搜索结果表述为未来预测（§17.2） |
+
+### 15.3 非功能需求
+
+| ID | 需求 |
+|---|---|
+| N1 | 性能：80 组合 × 20 年离线 sweep ≤ 15 分钟（8 进程；benchmark target 非闸门） |
+| N2 | 确定性：同组合结果与网格大小/顺序/进程数无关；sweep 连跑两遍指标 CSV 逐字节一致（manifest 时间戳字段除外） |
+| N3 | 防前视：研究层复用引擎，继承快照纪律；新增结构性测试——篡改 test 段数据不改变参数选择（AC-5） |
+| N4 | 保存粒度：默认 metrics-first（strategy/params/train-test 窗口/dataset metadata/code version/metrics/manifest）；`--save-all` 可选全量 states/trades/equity curves（防存储膨胀与 I/O 开销） |
+| N5 | 文档同步：Spec 为唯一事实来源；README 相应更新 |
+
+### 15.4 CLI / API 变更
+
+```text
+run_backtest.py  + --dte --delta --tp [--dte-exit --entry-frequency --max-open-positions]
+run_sweep.py     新增：--dte/--delta/--tp（逗号列表）、--train-end、--max-mdd、--sort-by、
+                  --save-all、--out runs/...
+compare_runs.py  新增：--runs A B C
+config.py        + sweep: {dte_target:[...], delta_target:[...], profit_target_pct:[...]}、
+                  split: {train_end}、benchmark: {price_return, total_return}
+新模块            analysis.py / vol.py / research.py
+```
+
+### 15.5 数据模型（新增类型）
+
+```text
+Metrics            { total_return, cagr, ann_vol, sharpe, sortino, calmar, max_dd,
+                     dd_duration_days, win_rate, profit_factor, avg_win, avg_loss,
+                     n_trades, trades_per_year, p5_trade_pnl, worst_trade_pnl,
+                     benchmark_price_return, benchmark_total_return,
+                     excess_vs_price, excess_vs_total, capital_efficiency }
+SegmentMetrics     { train: Metrics, test: Metrics, full: Metrics }
+SweepResult        { params, segment: SegmentMetrics, manifest_path }
+ExperimentManifest { config(展开), git_commit, package_version, dataset_fingerprint,
+                     train_end, test_eval_count, metrics, created_at }
+```
+
+### 15.6 验收标准
+
+| # | 验收项 | 通过条件 |
+|---|---|---|
+| 1 | 网格运行 | DTE=[20,30,45] × Delta=[0.1,0.2,0.3]（TP 固定）→ 9 个独立回测，产出统一格式 Return/CAGR/MDD/胜率明细表（9 行 + 基准行） |
+| 2 | 全维度网格 | DTE=[20,30,45,60] × Delta=[0.10,0.15,0.20,0.25,0.30] × TP=[0.25,0.50,0.75,1.00] 共 80 组合离线跑完；指标 CSV 每组合一行 |
+| 3 | 指标金标准 | 默认组合（30/0.20/0.50，2005–2024）经 `analysis` 重算 == 现有手算值：期末 173,061.18 / total_return 0.730612 / MDD −0.850484 / 529 笔 / 胜率 93.2% |
+| 4 | 指标手算锚点 | CAGR/Sharpe/Sortino/Calmar/Profit Factor 用固定小序列手算期望值写死测试 |
+| 5 | train/test 隔离 | train_end=2018-12-31 下，篡改 2019 年后测试段数据**不改变所选参数组合**（结构性测试）；test 指标仅最终报告；`test_eval_count` 写入 manifest |
+| 6 | 约束筛选 | `--max-mdd 0.30`：输出表仅含 train MDD ≥ −30% 的组合并按 CAGR 降序；可行集为空时显式输出"无可行解"（不自动放宽、不取最近似）；附最小 MDD 组合并标注"最接近约束 ≠ 满足约束" |
+| 7 | 复现性 | 同 dataset+config+seed 连跑两遍指标 CSV 逐字节一致；组合结果与进程数/网格顺序无关 |
+| 8 | Manifest + Compare | manifest.json 字段完整（§15.5）；compare 对 3 个 run 输出合并对比表；test 段禁排序 |
+| 9 | RV 分桶 | 每笔 Trade 按入场日 RV 分位落入 4 桶；分桶表含笔数/胜率/平均 PnL；桶边界与手算分位一致 |
+| 10 | 热图报告 | 离线 HTML：DTE×Delta 热图（≥4 指标）+ 约束筛选表 + 假设声明 + 效度声明 + **合成链月度到期限制声明** + 实际入场 DTE 分桶 |
+| 11 | 引擎零改动 | sim/strategy/portfolio/pricing/execution/margin/instruments/dividend/market_data/data/mc 与 M1-B 版本 **diff 为空** |
+| 12 | 回归闸门 | 既有 93 项测试全绿；10 年合成 benchmark 终值 44,640.09 不变；M1-A 离线复跑 173,061.18 不变 |
+| 13 | 性能 | 80 组合 20 年 sweep ≤ 15 分钟（8 进程；benchmark target） |
+| 14 | 研究报告 | 报告含：假设清单（§17.1）、train/test 窗口、约束可行性、Top-N、敏感性观察、§17.3 效度声明、test 统计噪声声明 |
+| 15 | 双基准 | Price/Total Return 基准同时输出；Total Return 指数与手算再投复现一致；引擎与 B&H 策略零改动 |
+
+### 15.7 实施顺序（建议）
+
+1. `analysis` 指标模块 + 金标准测试（AC-3/4）
+2. `vol` 模块（IV Rank / RV / RV 分桶）+ 测试（AC-9）
+3. config 增加 sweep/split/benchmark 字段 + `run_backtest.py` 参数 flag（F1）
+4. `research`：单组合运行封装 + train/test 分段指标（AC-5 结构性测试）
+5. manifest 写入 + `compare_runs.py`（AC-8）
+6. `run_sweep.py` 多进程网格 + metrics-first 聚合（AC-1/2/7/13）
+7. 约束筛选视图 + 无可行解行为（AC-6）
+8. 热图报告 + 研究 Markdown 报告（AC-10/14/15）
+9. 官方研究跑通：DTE×Delta×TP 全网格（train 搜索）→ 约束筛选 → test 最终验证
+10. Spec/README 修订 + 全量回归验收（AC-11/12）
+
+### 15.8 交付与验收状态（✅ 全部通过）
+
+**交付物**：`analysis.py`（指标 + 双基准）、`vol.py`（IV Rank / RV / RV 四桶）、
+`research.py`（单次运行 / train-test 切分 / sweep / manifest / 约束筛选 / 加载器）；
+`scripts/`：`run_sweep.py`、`finalize_experiment.py`、`build_sweep_report.py`、`compare_runs.py`；
+`run_backtest.py` 增加策略参数 flag；测试新增 `test_analysis/test_vol/test_research/test_manifest/
+test_sweep/test_selection/test_config/test_benchmark` 与 4 个 CLI 测试文件。
+
+**验收证据（2026-09-13）**：
+
+| 项 | 证据 |
+|---|---|
+| AC-1 网格运行 | DTE=[20,30,45] × δ=[0.10,0.20,0.30]（TP 固定）9 组合 + 基准行，`sweep_metrics.csv` 逐组一行 |
+| AC-2 全维度网格 | 4×5×4=**80 组合**全部跑完（`runs/sweep-official`，每组合 manifest + 指标 CSV） |
+| AC-3/4 指标金标准与手算 | M1-A 重算 == 173,061.18 / 0.730612 / −0.850484 / 529 笔 / 胜率 93.2%；CAGR/Sharpe/Sortino/Calmar/PF 手算锚点 |
+| AC-5 train/test 隔离 | 篡改 test 段数据 → train 段指标**逐位不变**、按 train 选出的参数不变（合成矩阵 + 真实数据双重验证）；搜索模式不计算 test |
+| AC-6 约束筛选 | 官方 sweep：80 组合 **0 个**满足 MDD ≤ 30% → 显式输出「无可行解」+「最接近约束 ≠ 满足约束」；不自动放宽 |
+| AC-7 复现性 | 同配置连跑两遍指标 CSV 逐字节一致；结果与进程数（1 vs 2/8）、网格顺序无关 |
+| AC-8 manifest/compare | manifest 含 §15.5 全部字段（+ 数据指纹/git/dirty/python）；`compare_runs.py` 三实验合并表，test 段禁排序 |
+| AC-9 RV 四桶 | 每笔按入场决策时点已知的 RV 分位归桶（四桶 + 边界手算一致） |
+| AC-10/14 报告 | `report.html`（离线自包含）+ `research_report.md`：6 指标热图 + 1D 边际、约束筛选、Top-N、敏感性观察、假设登记表（§17.1）、效度声明（§17.3）、**月度到期声明**、**实际入场 DTE 分桶**、复现命令 |
+| AC-11 引擎零改动 | 11 个核心模块 + `run_backtest.py` 的 `git diff` 为空 |
+| AC-12 回归闸门 | 213 项测试全绿；M1-A `173,061.18 / 0.730612 / −0.850484 / 529`、M1-B `484,689.27 / 3.846893 / −0.564619 / 1`、bench_m0 终值 `44,640.09` 均逐位一致 |
+| AC-13 性能 | 80 组合 × 20 年离线 sweep **366.4s**（8 进程，4.6s/组合）≤ 15 分钟目标 |
+| AC-15 双基准 | `total_return_index` 手算复现（+15.5% vs 价格型 +10%）；分段复合一致；引擎与 B&H 策略零改动；降级显式声明 |
+
+**官方研究结论（在当前假设下，详见 `runs/sweep-official/research_report.md`）**：该参数网格内
+**不存在**满足 MDD ≤ 30% 的参数（最小回撤 −62.95%）；delta 是主导变量（平均 CAGR −3.59% → +3.80%）；
+train 最优组合（DTE 30 / δ0.30 / TP 50%）在 test 段 +58.70%，但同期落后价格型基准 75.6 个百分点、
+落后总回报型基准 99.2 个百分点——**DTE/Delta/TP 三个维度不足以改变尾部风险结构**。
+
+**一处待决策的方法论问题**（记录在案，不阻塞交付）：当 MDD 约束**无可行解**时，Spec §15 F4/AC-6
+只规定"必须显式输出不可行、不得放宽、不得用最接近冒充"，**未规定后续动作**。当前实现采取
+"报告不可行性 + 对 train 最优组合做**唯一一次**样本外验证（报告标注这不是风险可行选择）"。
+是否改为"仅报告不可行性、完全不做样本外评估"，留待 M2 立项前确认。
+
+---
+
+## 16. M2 / M3 高层范围（逐项单独立项）
+
+### 16.1 M2 —— 研究深度
+
+- **Monte Carlo**（v0.7 决策：立项时单独设计）：
+  - 目标：回答"历史上未发生（或仅一次）的坏情景下策略会怎样"——未来 1 年收益分布、MDD 分布（P(MDD>30%/50%/80%)）、接近归零概率、跨参数风险对比（如 Delta 0.15 vs 0.30）。
+  - 方法候选：历史收益 **block bootstrap**（主；保留实证厚尾/波动聚集）、**参数化厚尾模型**（辅；外推超出历史）、GBM 仅作 sanity 基准（附录 C.4 锚点保留）。
+  - **立项时必须明确模拟对象**：underlying returns / volatility dynamics / option prices / strategy P&L 中的哪几项组合，并逐项声明假设与局限；其中"期权 IV 如何随模拟路径演化"是 MC 可信度上限，单独设计。
+- **完整 Market Regime Analysis**：bull/bear/sideways（趋势类）、high/low vol（波动率类）、极端事件（2008/2020/2022 案例标注）；按 regime 输出 CAGR/MDD/胜率/收益分布/持仓期/尾部亏损/回撤时长；regime × 参数交互分析。
+- **Experiment Tracking 完整化**：manifest 索引库（SQLite/DuckDB）+ 实验对比/查询界面（Notebook 或 Streamlit 薄壳，D2 精神）。
+- **SL / Roll（第一批）**：四臂对比 —— No SL/No Roll vs SL vs Roll vs SL+Roll；作为**研究假设**验证（不预设"SL/Roll 一定降低风险或提高收益"）；优先级 止损>止盈>roll>DTE>开仓（§5 已预留 `OrderReason.STOP_LOSS/ROLL`）。
+- **Tail Risk 深化**：收益分布、MDD 分布、ruin 概率、极端亏损事件案例分析。
+- （可选）**Walk-forward / rolling evaluation**：缓解单一 test 窗口统计功效问题（v0.7 决策：M1-C 不做）。
+
+### 16.2 M3 —— 数据真实性
+
+- **Real Historical Option Chain**：
+  - M3-A 立项前**重新评估供应商**（数据价格 / API 可用性 / 历史覆盖范围 / Greeks·IV / Bid·Ask / contract-level / License），M1-C/M2 不做字段级设计（v0.7 决策）；当前仅要求 Provider 抽象存在。
+  - 接入方式：`HistoricalOptionProvider(MarketDataProvider)` 实现既有接口（sessions / close_snapshot / open_snapshot）→ 引擎与策略**零改动**；`MarketSnapshot` 契约（bid/ask/last/volume/OI）已具备（§4.0）。
+  - 数据质量策略：QuotePolicy（最小 OI/成交量、最大价差、last 陈旧度）在 Provider 层过滤；策略选价天然自适应（只遍历有报价的行权价）。
+  - DataCache 落地（DuckDB/Parquet，D5 决策兑现）；manifest 增加 `data_version`。
+  - 周度到期属本阶段数据真实性议题（v0.7 决策：M1-C 合成链保持月度）。
+- **执行/保证金真实化**：Bid/Ask 成交口径、流动性过滤、Early Assignment 概率模型（配置开关，默认关）、更真实保证金（Portfolio Margin 仅在确有必要时立项）。
+- **Synthetic vs Real Fidelity Study**：同配置同窗口同纪律跑 synthetic 链 vs 真实链，对比 CAGR/MDD/权利金统计/入场 IV 分布——直接回答"模型真实性是否改变研究结论（synthetic 是否系统性高估收益/低估风险）"。
+
+---
+
+## 17. 金融假设登记与研究效度（v0.7）
+
+### 17.1 金融假设登记表（写入每个实验报告）
+
+| # | 假设 | 位置 | 标注 |
+|---|---|---|---|
+| 1 | 标的 = 真实 SPY 未复权日线（yfinance/缓存/CSV 三级） | `data.py` | realistic |
+| 2 | 期权报价 = 合成链（BS 定价） | `market_data.py` | synthetic |
+| 3 | 合成链 iv_atm = 20d 滚动已实现波动率（t−1 口径） | `HybridProvider` | synthetic；**无波动率风险溢价（VRP）** |
+| 4 | 合成链 skew=0（默认）、价差 5bps 常数；**月度到期结构** | `SyntheticChainEngine` | synthetic |
+| 5 | SPY 定价 = CRR 200 步美式；BS 仅近似（报告标注） | `pricing.py` | simplified（已声明） |
+| 6 | IV 反解 = BS 口径（美式标的亦然，市场惯例近似） | `implied_vol` | simplified |
+| 7 | 分红 = 连续 q（过去 12 个月实际分红 ÷ 前收） | `PerDayDividendModel` | simplified |
+| 8 | 成交 = Open(t) mid ± 5bps + $0.65/合约 + $1/单 | `FillModel` | simplified |
+| 9 | 保证金 = Simplified Reg-T-style（ETF 20%） | `margin.py` | simplified（research approximation，已声明） |
+| 10 | 指派 = 仅到期规则（ITM 收盘指派），无提前指派 | `sim.py` | simplified |
+| 11 | 指派后次日开盘卖出 | `sim.py` | simplified |
+| 12 | 无风险利率恒定 4%；现金不计息 | `config.py` | simplified |
+| 13 | 仓位 = 可用资金 50% ÷ 单合约保证金，≤1 腿 | `strategy._size` | strategy/research choice |
+| 14 | 无 Stop Loss / Roll（M1 范围） | `strategy.py` | strategy choice；**−85% MDD 的直接成因之一（研究假设，M2 验证，不预设结论）** |
+| 15 | 基准 = 价格型 + 总回报型 B&H（§6.4） | `analysis`（M1-C） | simplified 口径（约定写入报告） |
+| 16 | 入场 delta 按成交时快照记录（与目标值偏差属正常） | `sim.py` | engineering choice |
+
+### 17.2 研究效度（报告强制声明）
+
+- **可以比较可信地研究**：策略规则机制与生命周期（金标准背书）；参数敏感性（在 synthetic 假设**内部**的方向性结论）；标的下跌→亏损→指派传导机制；工程正确性（无前视/守恒/复现）。
+- **不能声称**：任何绝对收益水平或"真实可交易业绩"；权利金水平与真实市场可比（无 VRP）；尾部风险的真实量级（无跳变、IV=RV 滞后、无极端 IV 飙升定价）。
+- **Synthetic 链的影响**：① RV 平均低于市场 IV → 合成权利金系统性偏低 → 模拟收益偏低；② 崩盘期用滞后 RV 定价 → 尾部亏损方向近似、幅度不可信；③ 进出场时机由 RV 变化驱动而非市场 IV 变化 → 交易行为分布与真实回测不同。
+- **无预测原则（v0.7 决策）**：参数搜索结果（如"train 上 Delta=0.20 最好"）只能表述为"在当前模型、数据与研究区间下，训练集内表现最好"；**不得**包装为"未来最优参数/预测未来表现"。Test 的唯一作用是验证该结论能否样本外成立；test 指标存在统计噪声（样本量有限、尾部事件少），必须声明。
+- **Train/Test 纪律**：train 可用于参数搜索；test 仅最终评估；禁止按 test 结果回头选参（sweep 对比视图 test 段禁排序，D14；`test_eval_count` 写入 manifest）。
+
+### 17.3 报告效度声明模板（自动内嵌）
+
+1. 本报告结论仅在 §17.1 假设与 synthetic 期权报价下成立；
+2. 期权报价为合成（波动率 = SPY 20d 已实现波动率），非真实历史期权价格；收益与风险数字为研究近似，不构成任何未来表现预测；
+3. 合成链为月度到期结构（M1-C 决策），DTE 分析按实际入场 DTE 分桶；
+4. 参数在 train（2005–2018）上选择，test（2019–2024）仅作样本外验证；test 样本有限，指标含统计噪声；
+5. 参数搜索结果不是未来预测（§17.2）。
 
 ---
 
@@ -830,4 +1082,4 @@ d1' = [ln(S0/K) + (μ + σ²/2)T]/(σ√T)， d2' = d1' − σ√T
 
 ---
 
-*（本文档 v0.6.0 —— M0 与 M1-A 已完成；M1-B（多策略架构，§14）进行中。§10 决策记录为唯一事实来源，§12/§13 为 M0/M1-A 完成闸门（已通过）。）*
+*（本文档 v0.7.0 —— M0 / M1-A / M1-B / M1-C 均已完成。§10 决策记录为唯一事实来源，§12/§13/§14/§15 为 M0/M1-A/M1-B/M1-C 完成闸门（均已通过）。后续里程碑（M2 研究深度 / M3 数据真实性）见 §16。）*

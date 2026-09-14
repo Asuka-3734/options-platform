@@ -12,7 +12,10 @@
 - execution    下单与成交（期权 + 股票订单）
 - strategy     策略层（Sell Put + Buy & Hold，Strategy ABC）
 - sim          日频事件引擎（多策略）
-- mc           Monte Carlo 路径生成器（完整引擎 M3）
+- analysis     回测指标（Spec §6 / §15.5；纯函数，M1-C）
+- vol          波动率统计（IV Rank / RV / RV 四桶，Spec §6.2 / §15 F7；M1-C）
+- research     研究层（单组合运行 + train/test 分段指标，Spec §15 F5；M1-C）
+- mc           Monte Carlo 路径生成器（完整引擎 M2）
 """
 
 __version__ = "0.3.0"

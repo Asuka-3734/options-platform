@@ -1,7 +1,8 @@
 """类型化配置（Pydantic v2，Spec §2.3 / §4.4）。
 
-M0 最小可用模型：只包含 M0 实际使用的字段；
-sweep / split / monte_carlo 随 M1 / M3 功能引入（Spec §4.1 最小可用原则）。
+M0 最小可用模型：只包含实际使用的字段；
+M1-C 增加 `sweep` / `split` / `benchmark`（Spec §15 F1/F5/F10、§15.4）；
+`monte_carlo` 随 M2 引入（Spec §16.1）。
 """
 
 from __future__ import annotations
@@ -9,7 +10,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class RunConfig(BaseModel):
@@ -134,6 +135,68 @@ class StrategyConfig(BaseModel):
         return self
 
 
+class SweepConfig(BaseModel):
+    """网格 sweep 维度（Spec §15 F2 / §15.4；M1-C）。
+
+    空列表 = 该维度不参与 sweep（全部为空时退化为单次运行）。笛卡尔积的展开与执行属
+    `research` 层（Spec §15.7 第 4/6 步）。取值校验**复用 `SellPutParams`**，保证与你
+    直接运行单次回测时的规则完全一致（Spec §5）。
+    """
+
+    model_config = ConfigDict(extra="forbid")  # 拼错的维度名必须报错，不能静默忽略
+
+    dte_target: list[int] = Field(default_factory=list)
+    delta_target: list[float] = Field(default_factory=list)
+    profit_target_pct: list[float] = Field(default_factory=list)
+
+    @field_validator("dte_target")
+    @classmethod
+    def _validate_dte(cls, values: list[int]) -> list[int]:
+        for value in values:
+            SellPutParams(dte_target=value)
+        return values
+
+    @field_validator("delta_target")
+    @classmethod
+    def _validate_delta(cls, values: list[float]) -> list[float]:
+        for value in values:
+            SellPutParams(delta_target=value)
+        return values
+
+    @field_validator("profit_target_pct")
+    @classmethod
+    def _validate_tp(cls, values: list[float]) -> list[float]:
+        for value in values:
+            SellPutParams(profit_target_pct=value)
+        return values
+
+
+class SplitConfig(BaseModel):
+    """样本外切分（Spec §15 F5；M1-C 固定切分：train 2005–2018 / test 2019–2024）。
+
+    `train_end`：不晚于该日期的交易日属 train，其后属 test；`None` = 不切分（只出 full 指标）。
+    参数搜索只允许读取 train 段（Spec §10 D14 纪律），由 `research` 层保证。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    train_end: date | None = None
+
+
+class BenchmarkConfig(BaseModel):
+    """基准口径（Spec §6.4 v0.7 双基准；M1-C）。
+
+    Price Return = 期末收盘 ÷ 期初收盘 − 1；Total Return = 叠加现金分红再投资
+    （除息日分红按次一交易日开盘价再投，无摩擦/无税）。计算发生在 analysis 层，
+    不修改引擎与 Buy & Hold 策略（Spec §6.4 最小设计原则 4）。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    price_return: bool = True
+    total_return: bool = True
+
+
 class BacktestConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -145,3 +208,6 @@ class BacktestConfig(BaseModel):
     simulation: SimulationConfig = SimulationConfig()
     account: AccountConfig = AccountConfig()
     strategy: StrategyConfig = StrategyConfig()
+    sweep: SweepConfig = SweepConfig()
+    split: SplitConfig = SplitConfig()
+    benchmark: BenchmarkConfig = BenchmarkConfig()

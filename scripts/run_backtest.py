@@ -6,6 +6,8 @@
     uv run python scripts/run_backtest.py --offline          # 只用本地缓存/手动 CSV，不联网
     uv run python scripts/run_backtest.py --csv data/my.csv  # 指定手动数据文件
     uv run python scripts/run_backtest.py --strategy buy_hold  # 买入持有策略（M1-B 多策略）
+    uv run python scripts/run_backtest.py --dte 45 --delta 0.15 --tp 0.25  # M1-C 策略参数配置化
+    uv run python scripts/run_backtest.py --dte-exit 5 --entry-frequency when_free
 
 数据获取顺序：本地缓存 data/spy_daily.csv → yfinance（走 HTTPS_PROXY 代理）
 → 手动 CSV 兜底。首次联网成功后自动写缓存，之后完全离线可复现。
@@ -29,6 +31,7 @@ matplotlib.use("Agg")  # 无窗口环境直接出图
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
+from pydantic import ValidationError  # noqa: E402
 
 from sellput.config import (  # noqa: E402
     BacktestConfig,
@@ -42,8 +45,9 @@ from sellput.instruments import NyseCalendar, OptionSpec  # noqa: E402
 from sellput.market_data import build_provider  # noqa: E402
 from sellput.sim import SimulationEngine  # noqa: E402
 
-# Windows 控制台默认 GBK，强制 UTF-8 输出中文报告
+# Windows 控制台默认 GBK，强制 UTF-8 输出中文报告与中文报错
 sys.stdout.reconfigure(encoding="utf-8")
+sys.stderr.reconfigure(encoding="utf-8")
 plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]
 plt.rcParams["axes.unicode_minus"] = False
 
@@ -80,7 +84,69 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         default="sell_put",
         help="策略类型（M1-B 多策略：sell_put / buy_hold）",
     )
+    sp = ap.add_argument_group("Sell Put 策略参数（M1-C 参数配置化，Spec §15 F1）")
+    sp.add_argument("--dte", type=int, default=None, help="开仓目标 DTE（默认 30）")
+    sp.add_argument(
+        "--delta", type=float, default=None, help="目标 delta 绝对值（默认 0.20；须 0<delta<0.5）"
+    )
+    sp.add_argument("--tp", type=float, default=None, help="止盈比例（默认 0.50；0 = 关闭止盈）")
+    sp.add_argument("--dte-exit", type=int, default=None, help="剩余 DTE ≤ 该值强制退出（默认 3）")
+    sp.add_argument(
+        "--entry-frequency",
+        choices=["weekly", "when_free"],
+        default=None,
+        help="开仓频率（默认 weekly）",
+    )
+    sp.add_argument(
+        "--max-open-positions", type=int, default=None, help="同时持有的空头 Put 腿数上限（默认 1）"
+    )
     return ap.parse_args(argv)
+
+
+#: CLI flag → SellPutParams 字段（Spec §15 F1 / §15.4）
+SELL_PUT_PARAM_FLAGS: dict[str, str] = {
+    "dte": "dte_target",
+    "delta": "delta_target",
+    "tp": "profit_target_pct",
+    "dte_exit": "dte_exit",
+    "entry_frequency": "entry_frequency",
+    "max_open_positions": "max_open_positions",
+}
+
+
+def build_strategy_config(args: argparse.Namespace) -> StrategyConfig:
+    """按 CLI 参数构建策略配置（Spec §15 F1）；校验沿用 Pydantic 的 SellPutParams（Spec §5）。"""
+    overrides = {
+        field: getattr(args, flag)
+        for flag, field in SELL_PUT_PARAM_FLAGS.items()
+        if getattr(args, flag) is not None
+    }
+    if args.strategy == "buy_hold":
+        if overrides:
+            raise SystemExit(
+                "参数错误：--dte / --delta / --tp / --dte-exit / --entry-frequency / "
+                "--max-open-positions 仅适用于 --strategy sell_put"
+            )
+        return StrategyConfig(type="buy_hold", params=BuyHoldParams())
+    try:
+        params = SellPutParams(**overrides)
+    except ValidationError as err:
+        raise SystemExit(f"参数校验失败（Spec §5 Sell Put 参数约束）：{err}") from err
+    return StrategyConfig(type="sell_put", params=params)
+
+
+def describe_strategy_params(strategy: StrategyConfig) -> str:
+    """策略参数的人类可读摘要（写进 stdout 报告头，便于确认"这次跑的是哪组参数"）。"""
+    params = strategy.params
+    if isinstance(params, SellPutParams):
+        return (
+            f"DTE {params.dte_target} / delta {params.delta_target:.2f} / "
+            f"止盈 {params.profit_target_pct:.0%} / DTE<={params.dte_exit} 强退 / "
+            f"{params.entry_frequency} / 最多 {params.max_open_positions} 腿"
+        )
+    if isinstance(params, BuyHoldParams):
+        return f"allocation {params.allocation:.0%}（首日全仓买入、期末清仓、分红不付现）"
+    return str(params)
 
 
 def pct(x: float) -> str:
@@ -118,11 +184,7 @@ def plot_equity(
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     strat_label = STRATEGY_LABEL[args.strategy]
-    strategy = (
-        StrategyConfig(type="sell_put", params=SellPutParams())
-        if args.strategy == "sell_put"
-        else StrategyConfig(type="buy_hold", params=BuyHoldParams())
-    )
+    strategy = build_strategy_config(args)
     cfg = BacktestConfig(
         run={"name": "m1b" if args.strategy == "buy_hold" else "m1a", "seed": args.seed},
         data=DataConfig(
@@ -150,6 +212,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print("=" * 78)
     print(f"{strat_label} 回测报告（M1-B · 标的 {args.symbol} 真实日线 / 期权合成报价）")
+    print(f"策略参数: {describe_strategy_params(strategy)}")
     print("=" * 78)
     print(f"区间: {args.start} → {args.end}   交易日: {len(states)}   "
           f"引擎耗时: {result.duration_seconds:.2f}s")
